@@ -1,5 +1,5 @@
 //
-//  BWAddress.c
+//  BRAddress.c
 //
 //  Created by Aaron Voisine on 9/18/15.
 //  Copyright (c) 2015 breadwallet LLC
@@ -22,10 +22,10 @@
 //  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 //  THE SOFTWARE.
 
-#include "BWAddress.h"
-#include "BWBase58.h"
-#include "BWBech32.h"
-#include "BWInt.h"
+#include "BRAddress.h"
+#include "BRBase58.h"
+#include "BRBech32.h"
+#include "BRInt.h"
 #include <inttypes.h>
 #include <assert.h>
 
@@ -36,7 +36,7 @@
 
 // reads a varint from buf and stores its length in intLen if intLen is non-NULL
 // returns the varint value
-uint64_t BWVarInt(const uint8_t *buf, size_t bufLen, size_t *intLen)
+uint64_t BRVarInt(const uint8_t *buf, size_t bufLen, size_t *intLen)
 {
     uint64_t r = 0;
     uint8_t h = (buf && sizeof(uint8_t) <= bufLen) ? *buf : 0;
@@ -67,7 +67,7 @@ uint64_t BWVarInt(const uint8_t *buf, size_t bufLen, size_t *intLen)
 }
 
 // writes i to buf as a varint and returns the number of bytes written, or bufLen needed if buf is NULL
-size_t BWVarIntSet(uint8_t *buf, size_t bufLen, uint64_t i)
+size_t BRVarIntSet(uint8_t *buf, size_t bufLen, uint64_t i)
 {
     size_t r = 0;
     
@@ -104,14 +104,14 @@ size_t BWVarIntSet(uint8_t *buf, size_t bufLen, uint64_t i)
 }
 
 // returns the number of bytes needed to encode i as a varint
-size_t BWVarIntSize(uint64_t i)
+size_t BRVarIntSize(uint64_t i)
 {
-    return BWVarIntSet(NULL, 0, i);
+    return BRVarIntSet(NULL, 0, i);
 }
 
 // parses script and writes an array of pointers to the script elements (opcodes and data pushes) to elems
 // returns the number of elements written, or elemsCount needed if elems is NULL
-size_t BWScriptElements(const uint8_t *elems[], size_t elemsCount, const uint8_t *script, size_t scriptLen)
+size_t BRScriptElements(const uint8_t *elems[], size_t elemsCount, const uint8_t *script, size_t scriptLen)
 {
     size_t off = 0, i = 0, len = 0;
     
@@ -153,7 +153,7 @@ size_t BWScriptElements(const uint8_t *elems[], size_t elemsCount, const uint8_t
 }
 
 // given a data push script element, returns a pointer to the start of the data and writes its length to dataLen
-const uint8_t *BWScriptData(const uint8_t *elem, size_t *dataLen)
+const uint8_t *BRScriptData(const uint8_t *elem, size_t *dataLen)
 {
     assert(elem != NULL);
     assert(dataLen != NULL);
@@ -189,7 +189,7 @@ const uint8_t *BWScriptData(const uint8_t *elem, size_t *dataLen)
 
 // writes a data push script element to script
 // returns the number of bytes written, or scriptLen needed if script is NULL
-size_t BWScriptPushData(uint8_t *script, size_t scriptLen, const uint8_t *data, size_t dataLen)
+size_t BRScriptPushData(uint8_t *script, size_t scriptLen, const uint8_t *data, size_t dataLen)
 {
     size_t len = dataLen;
 
@@ -236,15 +236,15 @@ size_t BWScriptPushData(uint8_t *script, size_t scriptLen, const uint8_t *data, 
 
 // writes the bitcoin address for a scriptPubKey to addr
 // returns the number of bytes written, or addrLen needed if addr is NULL
-size_t BWAddressFromScriptPubKey(char *addr, size_t addrLen, const uint8_t *script, size_t scriptLen)
+size_t BRAddressFromScriptPubKey(char *addr, size_t addrLen, const uint8_t *script, size_t scriptLen)
 {
     assert(script != NULL || scriptLen == 0);
     if (! script || scriptLen == 0 || scriptLen > MAX_SCRIPT_LENGTH) return 0;
     
     uint8_t data[21];
-    const uint8_t *d, *elems[BWScriptElements(NULL, 0, script, scriptLen)];
+    const uint8_t *d, *elems[BRScriptElements(NULL, 0, script, scriptLen)];
     char a[91];
-    size_t r = 0, l = 0, count = BWScriptElements(elems, sizeof(elems)/sizeof(*elems), script, scriptLen);
+    size_t r = 0, l = 0, count = BRScriptElements(elems, sizeof(elems)/sizeof(*elems), script, scriptLen);
     if (count == 5 && *elems[0] == OP_DUP && *elems[1] == OP_HASH160 && *elems[2] == 20 &&
         *elems[3] == OP_EQUALVERIFY && *elems[4] == OP_CHECKSIG) {
         // pay-to-pubkey-hash scriptPubKey
@@ -252,8 +252,8 @@ size_t BWAddressFromScriptPubKey(char *addr, size_t addrLen, const uint8_t *scri
 #if LITECOIN_TESTNET
         data[0] = BITCOIN_PUBKEY_ADDRESS_TEST;
 #endif
-        memcpy(&data[1], BWScriptData(elems[2], &l), 20);
-        r = BWBase58CheckEncode(addr, addrLen, data, 21);
+        memcpy(&data[1], BRScriptData(elems[2], &l), 20);
+        r = BRBase58CheckEncode(addr, addrLen, data, 21);
     }
     else if (count == 3 && *elems[0] == OP_HASH160 && *elems[1] == 20 && *elems[2] == OP_EQUAL) {
         // pay-to-script-hash scriptPubKey
@@ -261,8 +261,8 @@ size_t BWAddressFromScriptPubKey(char *addr, size_t addrLen, const uint8_t *scri
 #if LITECOIN_TESTNET
         data[0] = BITCOIN_SCRIPT_ADDRESS_TEST;
 #endif
-        memcpy(&data[1], BWScriptData(elems[1], &l), 20);
-        r = BWBase58CheckEncode(addr, addrLen, data, 21);
+        memcpy(&data[1], BRScriptData(elems[1], &l), 20);
+        r = BRBase58CheckEncode(addr, addrLen, data, 21);
     }
     else if (count == 2 && (*elems[0] == 65 || *elems[0] == 33) && *elems[1] == OP_CHECKSIG) {
         // pay-to-pubkey scriptPubKey
@@ -270,16 +270,16 @@ size_t BWAddressFromScriptPubKey(char *addr, size_t addrLen, const uint8_t *scri
 #if LITECOIN_TESTNET
         data[0] = BITCOIN_PUBKEY_ADDRESS_TEST;
 #endif
-        d = BWScriptData(elems[0], &l);
-        BWHash160(&data[1], d, l);
-        r = BWBase58CheckEncode(addr, addrLen, data, 21);
+        d = BRScriptData(elems[0], &l);
+        BRHash160(&data[1], d, l);
+        r = BRBase58CheckEncode(addr, addrLen, data, 21);
     }
     else if (count == 2 && ((*elems[0] == OP_0 && (*elems[1] == 20 || *elems[1] == 32)) ||
                             (*elems[0] >= OP_1 && *elems[0] <= OP_16 && *elems[1] >= 2 && *elems[1] <= 40))) {
         // pay-to-witness scriptPubKey
-        r = BWBech32Encode(a, "ltc", script);
+        r = BRBech32Encode(a, "ltc", script);
 #if LITECOIN_TESTNET
-        r = BWBech32Encode(a, "tltc", script);
+        r = BRBech32Encode(a, "tltc", script);
 #endif
         if (addr && r > addrLen) r = 0;
         if (addr) memcpy(addr, a, r);
@@ -290,7 +290,7 @@ size_t BWAddressFromScriptPubKey(char *addr, size_t addrLen, const uint8_t *scri
 
 // writes the bitcoin address for a scriptSig to addr
 // returns the number of bytes written, or addrLen needed if addr is NULL
-size_t BWAddressFromScriptSig(char *addr, size_t addrLen, const uint8_t *script, size_t scriptLen)
+size_t BRAddressFromScriptSig(char *addr, size_t addrLen, const uint8_t *script, size_t scriptLen)
 {
     assert(script != NULL || scriptLen == 0);
     if (! script || scriptLen == 0 || scriptLen > MAX_SCRIPT_LENGTH) return 0;

@@ -1,2 +1,4 @@
-# core
-The legacy wallet and database code
+# breadwallet-core
+SPV bitcoin C library
+
+[getting started](https://github.com/breadwallet/breadwallet-core/wiki)
