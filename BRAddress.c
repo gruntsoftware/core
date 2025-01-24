@@ -296,8 +296,8 @@ size_t BRAddressFromScriptSig(char *addr, size_t addrLen, const uint8_t *script,
     if (! script || scriptLen == 0 || scriptLen > MAX_SCRIPT_LENGTH) return 0;
     
     uint8_t data[21];
-    const uint8_t *elems[BWScriptElements(NULL, 0, script, scriptLen)], *d = NULL;
-    size_t count = BWScriptElements(elems, sizeof(elems)/sizeof(*elems), script, scriptLen), l = 0;
+    const uint8_t *elems[BRScriptElements(NULL, 0, script, scriptLen)], *d = NULL;
+    size_t count = BRScriptElements(elems, sizeof(elems)/sizeof(*elems), script, scriptLen), l = 0;
 
     data[0] = BITCOIN_PUBKEY_ADDRESS;
 #if LITECOIN_TESTNET
@@ -306,9 +306,9 @@ size_t BRAddressFromScriptSig(char *addr, size_t addrLen, const uint8_t *script,
     
     if (count >= 2 && *elems[count - 2] <= OP_PUSHDATA4 &&
         (*elems[count - 1] == 65 || *elems[count - 1] == 33)) { // pay-to-pubkey-hash scriptSig
-        d = BWScriptData(elems[count - 1], &l);
+        d = BRScriptData(elems[count - 1], &l);
         if (l != 65 && l != 33) d = NULL;
-        if (d) BWHash160(&data[1], d, l);
+        if (d) BRHash160(&data[1], d, l);
     }
     else if (count >= 2 && *elems[count - 2] <= OP_PUSHDATA4 && *elems[count - 1] <= OP_PUSHDATA4 &&
              *elems[count - 1] > 0) { // pay-to-script-hash scriptSig
@@ -316,26 +316,26 @@ size_t BRAddressFromScriptSig(char *addr, size_t addrLen, const uint8_t *script,
 #if LITECOIN_TESTNET
         data[0] = BITCOIN_SCRIPT_ADDRESS_TEST;
 #endif
-        d = BWScriptData(elems[count - 1], &l);
-        if (d) BWHash160(&data[1], d, l);
+        d = BRScriptData(elems[count - 1], &l);
+        if (d) BRHash160(&data[1], d, l);
     }
     else if (count >= 1 && *elems[count - 1] <= OP_PUSHDATA4 && *elems[count - 1] > 0) { // pay-to-pubkey scriptSig
         // TODO: implement Peter Wullie's pubKey recovery from signature
     }
     // pay-to-witness scriptSig's are empty
-    return (d) ? BWBase58CheckEncode(addr, addrLen, data, 21) : 0;
+    return (d) ? BRBase58CheckEncode(addr, addrLen, data, 21) : 0;
 }
 
 // writes the bitcoin address for a witness to addr
 // returns the number of bytes written, or addrLen needed if addr is NULL
-size_t BWAddressFromWitness(char *addr, size_t addrLen, const uint8_t *witness, size_t witLen)
+size_t BRAddressFromWitness(char *addr, size_t addrLen, const uint8_t *witness, size_t witLen)
 {
     return 0; // TODO: XXX implement
 }
 
 // writes the scriptPubKey for addr to script
 // returns the number of bytes written, or scriptLen needed if script is NULL
-size_t BWAddressScriptPubKey(uint8_t *script, size_t scriptLen, const char *addr)
+size_t BRAddressScriptPubKey(uint8_t *script, size_t scriptLen, const char *addr)
 {
     uint8_t data[42], pubkeyAddress = BITCOIN_PUBKEY_ADDRESS, scriptAddress = BITCOIN_SCRIPT_ADDRESS;
     char hrp[84], *bech32Prefix = "ltc";
@@ -349,7 +349,7 @@ size_t BWAddressScriptPubKey(uint8_t *script, size_t scriptLen, const char *addr
     bech32Prefix = "tltc";
 #endif
     
-    if (BWBase58CheckDecode(data, sizeof(data), addr) == 21) {
+    if (BRBase58CheckDecode(data, sizeof(data), addr) == 21) {
         if (data[0] == pubkeyAddress) {
             if (script && 25 <= scriptLen) {
                 script[0] = OP_DUP;
@@ -374,7 +374,7 @@ size_t BWAddressScriptPubKey(uint8_t *script, size_t scriptLen, const char *addr
         }
     }
     else {
-        dataLen = BWBech32Decode(hrp, data, addr);
+        dataLen = BRBech32Decode(hrp, data, addr);
         if (dataLen > 2 && strcmp(hrp, bech32Prefix) == 0 && (data[0] != OP_0 || data[1] == 20 || data[1] == 32)) {
             if (script && dataLen <= scriptLen) memcpy(script, data, dataLen);
             r = (! script || dataLen <= scriptLen) ? dataLen : 0;
@@ -385,7 +385,7 @@ size_t BWAddressScriptPubKey(uint8_t *script, size_t scriptLen, const char *addr
 }
 
 // returns true if addr is a valid bitcoin address
-int BWAddressIsValid(const char *addr)
+int BRAddressIsValid(const char *addr)
 {
     uint8_t data[42];
     char hrp[84];
@@ -393,14 +393,14 @@ int BWAddressIsValid(const char *addr)
     
     assert(addr != NULL);
     
-    if (BWBase58CheckDecode(data, sizeof(data), addr) == 21) {
+    if (BRBase58CheckDecode(data, sizeof(data), addr) == 21) {
         r = (data[0] == BITCOIN_PUBKEY_ADDRESS || data[0] == BITCOIN_SCRIPT_ADDRESS);
     
 #if LITECOIN_TESTNET
         r = (data[0] == BITCOIN_PUBKEY_ADDRESS_TEST || data[0] == BITCOIN_SCRIPT_ADDRESS_TEST);
 #endif
     }
-    else if (BWBech32Decode(hrp, data, addr) > 2) {
+    else if (BRBech32Decode(hrp, data, addr) > 2) {
         r = (strcmp(hrp, "ltc") == 0 && (data[0] != OP_0 || data[1] == 20 || data[1] == 32));
 
 #if LITECOIN_TESTNET
@@ -412,14 +412,14 @@ int BWAddressIsValid(const char *addr)
 }
 
 // writes the 20 byte hash160 of addr to md20 and returns true on success
-int BWAddressHash160(void *md20, const char *addr)
+int BRAddressHash160(void *md20, const char *addr)
 {
     uint8_t data[21];
     int r = 0;
     
     assert(md20 != NULL);
     assert(addr != NULL);
-    r = (BWBase58CheckDecode(data, sizeof(data), addr) == 21);
+    r = (BRBase58CheckDecode(data, sizeof(data), addr) == 21);
     if (r) memcpy(md20, &data[1], 20);
     return r;
 }

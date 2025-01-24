@@ -1,5 +1,5 @@
 //
-//  BWSet.c
+//  BRSet.c
 //
 //  Created by Aaron Voisine on 9/11/15.
 //  Copyright (c) 2015 breadwallet LLC
@@ -22,7 +22,7 @@
 //  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 //  THE SOFTWARE.
 
-#include "BWSet.h"
+#include "BRSet.h"
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
@@ -38,7 +38,7 @@ static const size_t tableSizes[] = { // starting with 1, multiply by 3/2, round 
 
 #define TABLE_SIZES_LEN (sizeof(tableSizes)/sizeof(*tableSizes))
 
-struct BWSetStruct {
+struct BRSetStruct {
     void **table; // hashtable
     size_t size; // number of buckets in table
     size_t itemCount; // number of items in set
@@ -46,7 +46,7 @@ struct BWSetStruct {
     int (*eq)(const void *, const void *); // equality function
 };
 
-static void _BWSetInit(BWSet *set, size_t (*hash)(const void *), int (*eq)(const void *, const void *), size_t capacity)
+static void _BRSetInit(BRSet *set, size_t (*hash)(const void *), int (*eq)(const void *, const void *), size_t capacity)
 {
     assert(set != NULL);
     assert(hash != NULL);
@@ -68,27 +68,27 @@ static void _BWSetInit(BWSet *set, size_t (*hash)(const void *), int (*eq)(const
     set->eq = eq;
 }
 
-// retruns a newly allocated empty set that must be freed by calling BWSetFree()
+// retruns a newly allocated empty set that must be freed by calling BRSetFree()
 // size_t hash(const void *) is a function that returns a hash value for a given set item
 // int eq(const void *, const void *) is a function that returns true if two set items are equal
 // any two items that are equal must also have identical hash values
 // capacity is the maximum estimated number of items the set will need to hold
-BWSet *BWSetNew(size_t (*hash)(const void *), int (*eq)(const void *, const void *), size_t capacity)
+BRSet *BRSetNew(size_t (*hash)(const void *), int (*eq)(const void *, const void *), size_t capacity)
 {
-    BWSet *set = calloc(1, sizeof(*set));
+    BRSet *set = calloc(1, sizeof(*set));
     
     assert(set != NULL);
-    _BWSetInit(set, hash, eq, capacity);
+    _BRSetInit(set, hash, eq, capacity);
     return set;
 }
 
 // rebuilds hashtable to hold up to capacity items
-static void _BWSetGrow(BWSet *set, size_t capacity)
+static void _BRSetGrow(BRSet *set, size_t capacity)
 {
-    BWSet newSet;
+    BRSet newSet;
     
-    _BWSetInit(&newSet, set->hash, set->eq, capacity);
-    BWSetUnion(&newSet, set);
+    _BRSetInit(&newSet, set->hash, set->eq, capacity);
+    BRSetUnion(&newSet, set);
     free(set->table);
     set->table = newSet.table;
     set->size = newSet.size;
@@ -96,7 +96,7 @@ static void _BWSetGrow(BWSet *set, size_t capacity)
 }
 
 // adds given item to set or replaces an equivalent existing item and returns item replaced if any
-void *BWSetAdd(BWSet *set, void *item)
+void *BRSetAdd(BRSet *set, void *item)
 {
     assert(set != NULL);
     assert(item != NULL);
@@ -112,12 +112,12 @@ void *BWSetAdd(BWSet *set, void *item)
 
     if (! t) set->itemCount++;
     set->table[i] = item;
-    if (set->itemCount > ((size + 2)/3)*2) _BWSetGrow(set, size); // limit load factor to 2/3
+    if (set->itemCount > ((size + 2)/3)*2) _BRSetGrow(set, size); // limit load factor to 2/3
     return t;
 }
 
 // removes item equivalent to given item from set and returns item removed if any
-void *BWSetRemove(BWSet *set, const void *item)
+void *BRSetRemove(BRSet *set, const void *item)
 {
     assert(set != NULL);
     assert(item != NULL);
@@ -140,7 +140,7 @@ void *BWSetRemove(BWSet *set, const void *item)
         while (t) { // hashtable cleanup
             set->itemCount--;
             set->table[i] = NULL;
-            BWSetAdd(set, t);
+            BRSetAdd(set, t);
             i = (i + 1) % size;
             t = set->table[i];
         }
@@ -150,7 +150,7 @@ void *BWSetRemove(BWSet *set, const void *item)
 }
 
 // removes all items from set
-void BWSetClear(BWSet *set)
+void BRSetClear(BRSet *set)
 {
     assert(set != NULL);
     
@@ -159,7 +159,7 @@ void BWSetClear(BWSet *set)
 }
 
 // returns the number of items in set
-size_t BWSetCount(const BWSet *set)
+size_t BRSetCount(const BRSet *set)
 {
     assert(set != NULL);
     
@@ -167,13 +167,13 @@ size_t BWSetCount(const BWSet *set)
 }
 
 // true if an item equivalant to the given item is contained in set
-int BWSetContains(const BWSet *set, const void *item)
+int BRSetContains(const BRSet *set, const void *item)
 {
-    return (BWSetGet(set, item) != NULL);
+    return (BRSetGet(set, item) != NULL);
 }
 
 // true if any items in otherSet are contained in set
-int BWSetIntersects(const BWSet *set, const BWSet *otherSet)
+int BRSetIntersects(const BRSet *set, const BRSet *otherSet)
 {
     assert(set != NULL);
     assert(otherSet != NULL);
@@ -183,14 +183,14 @@ int BWSetIntersects(const BWSet *set, const BWSet *otherSet)
     
     while (i < size) {
         t = otherSet->table[i++];
-        if (t && BWSetGet(set, t) != NULL) return 1;
+        if (t && BRSetGet(set, t) != NULL) return 1;
     }
     
     return 0;
 }
 
 // returns member item from set equivalent to given item, or NULL if there is none
-void *BWSetGet(const BWSet *set, const void *item)
+void *BRSetGet(const BRSet *set, const void *item)
 {
     assert(set != NULL);
     assert(item != NULL);
@@ -209,7 +209,7 @@ void *BWSetGet(const BWSet *set, const void *item)
 
 // interates over set and returns the next item after previous, or NULL if no more items are available
 // if previous is NULL, an initial item is returned
-void *BWSetIterate(const BWSet *set, const void *previous)
+void *BRSetIterate(const BRSet *set, const void *previous)
 {
     assert(set != NULL);
     
@@ -233,7 +233,7 @@ void *BWSetIterate(const BWSet *set, const void *previous)
 }
 
 // writes up to count items from set to allItems and returns the number of items written
-size_t BWSetAll(const BWSet *set, void *allItems[], size_t count)
+size_t BRSetAll(const BRSet *set, void *allItems[], size_t count)
 {
     assert(set != NULL);
     assert(allItems != NULL || count == 0);
@@ -251,7 +251,7 @@ size_t BWSetAll(const BWSet *set, void *allItems[], size_t count)
 }
 
 // calls apply() with each item in set
-void BWSetApply(const BWSet *set, void *info, void (*apply)(void *info, void *item))
+void BRSetApply(const BRSet *set, void *info, void (*apply)(void *info, void *item))
 {
     assert(set != NULL);
     assert(apply != NULL);
@@ -266,7 +266,7 @@ void BWSetApply(const BWSet *set, void *info, void (*apply)(void *info, void *it
 }
 
 // adds or replaces items from otherSet into set
-void BWSetUnion(BWSet *set, const BWSet *otherSet)
+void BRSetUnion(BRSet *set, const BRSet *otherSet)
 {
     assert(set != NULL);
     assert(otherSet != NULL);
@@ -276,12 +276,12 @@ void BWSetUnion(BWSet *set, const BWSet *otherSet)
     
     while (i < size) {
         t = otherSet->table[i++];
-        if (t) BWSetAdd(set, t);
+        if (t) BRSetAdd(set, t);
     }
 }
 
 // removes items contained in otherSet from set
-void BWSetMinus(BWSet *set, const BWSet *otherSet)
+void BRSetMinus(BRSet *set, const BRSet *otherSet)
 {
     assert(set != NULL);
     assert(otherSet != NULL);
@@ -291,12 +291,12 @@ void BWSetMinus(BWSet *set, const BWSet *otherSet)
     
     while (i < size) {
         t = otherSet->table[i++];
-        if (t) BWSetRemove(set, t);
+        if (t) BRSetRemove(set, t);
     }
 }
 
 // removes items not contained in otherSet from set
-void BWSetIntersect(BWSet *set, const BWSet *otherSet)
+void BRSetIntersect(BRSet *set, const BRSet *otherSet)
 {
     assert(set != NULL);
     assert(otherSet != NULL);
@@ -307,15 +307,15 @@ void BWSetIntersect(BWSet *set, const BWSet *otherSet)
     while (i < size) {
         t = set->table[i];
 
-        if (t && ! BWSetContains(otherSet, t)) {
-            BWSetRemove(set, t);
+        if (t && ! BRSetContains(otherSet, t)) {
+            BRSetRemove(set, t);
         }
         else i++;
     }
 }
 
 // frees memory allocated for set
-void BWSetFree(BWSet *set)
+void BRSetFree(BRSet *set)
 {
     assert(set != NULL);
 

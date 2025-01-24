@@ -1,5 +1,5 @@
 //
-//  BWArray.h
+//  BRArray.h
 //
 //  Created by Aaron Voisine on 11/14/15.
 //  Copyright (c) 2015 breadwallet LLC.
@@ -22,8 +22,8 @@
 //  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 //  THE SOFTWARE.
 
-#ifndef BWArray_h
-#define BWArray_h
+#ifndef BRArray_h
+#define BRArray_h
 
 #include <stdlib.h>
 #include <string.h>
@@ -181,4 +181,4 @@ extern "C" {
 }
 #endif
 
-#endif // BWArray_h
+#endif // BRArray_h

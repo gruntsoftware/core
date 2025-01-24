@@ -1,5 +1,5 @@
 //
-//  BWBIP39Mnemonic.c
+//  BRBIP39Mnemonic.c
 //
 //  Created by Aaron Voisine on 9/7/15.
 //  Copyright (c) 2015 breadwallet LLC
@@ -22,14 +22,14 @@
 //  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 //  THE SOFTWARE.
 
-#include "BWBIP39Mnemonic.h"
-#include "BWCrypto.h"
-#include "BWInt.h"
+#include "BRBIP39Mnemonic.h"
+#include "BRCrypto.h"
+#include "BRInt.h"
 #include <string.h>
 #include <assert.h>
 
 // returns number of bytes written to phrase including NULL terminator, or phraseLen needed if phrase is NULL
-size_t BWBIP39Encode(char *phrase, size_t phraseLen, const char *wordList[], const uint8_t *data, size_t dataLen)
+size_t BRBIP39Encode(char *phrase, size_t phraseLen, const char *wordList[], const uint8_t *data, size_t dataLen)
 {
     uint32_t x;
     uint8_t buf[dataLen + 32];
@@ -42,7 +42,7 @@ size_t BWBIP39Encode(char *phrase, size_t phraseLen, const char *wordList[], con
     if (! data || (dataLen % 4) != 0) return 0; // data length must be a multiple of 32 bits
     
     memcpy(buf, data, dataLen);
-    BWSHA256(&buf[dataLen], data, dataLen); // append SHA256 checksum
+    BRSHA256(&buf[dataLen], data, dataLen); // append SHA256 checksum
 
     for (i = 0; i < dataLen*3/4; i++) {
         x = UInt32GetBE(&buf[i*11/8]);
@@ -60,7 +60,7 @@ size_t BWBIP39Encode(char *phrase, size_t phraseLen, const char *wordList[], con
 }
 
 // returns number of bytes written to data, or dataLen needed if data is NULL
-size_t BWBIP39Decode(uint8_t *data, size_t dataLen, const char *wordList[], const char *phrase)
+size_t BRBIP39Decode(uint8_t *data, size_t dataLen, const char *wordList[], const char *phrase)
 {
     uint32_t x, y, count = 0, idx[24], i;
     uint8_t b = 0, hash[32];
@@ -94,7 +94,7 @@ size_t BWBIP39Decode(uint8_t *data, size_t dataLen, const char *wordList[], cons
             buf[i] = b;
         }
     
-        BWSHA256(hash, buf, count*4/3);
+        BRSHA256(hash, buf, count*4/3);
 
         if (b >> (8 - count/3) == (hash[0] >> (8 - count/3))) { // verify checksum
             r = count*4/3;
@@ -111,17 +111,17 @@ size_t BWBIP39Decode(uint8_t *data, size_t dataLen, const char *wordList[], cons
 }
 
 // verifies that all phrase words are contained in wordlist and checksum is valid
-int BWBIP39PhraseIsValid(const char *wordList[], const char *phrase)
+int BRBIP39PhraseIsValid(const char *wordList[], const char *phrase)
 {
     assert(wordList != NULL);
     assert(phrase != NULL);
-    return (BWBIP39Decode(NULL, 0, wordList, phrase) > 0);
+    return (BRBIP39Decode(NULL, 0, wordList, phrase) > 0);
 }
 
 // key64 must hold 64 bytes (512 bits), phrase and passphrase must be unicode NFKD normalized
 // http://www.unicode.org/reports/tr15/#Norm_Forms
 // BUG: does not currently support passphrases containing NULL characters
-void BWBIP39DeriveKey(void *key64, const char *phrase, const char *passphrase)
+void BRBIP39DeriveKey(void *key64, const char *phrase, const char *passphrase)
 {
     char salt[strlen("mnemonic") + (passphrase ? strlen(passphrase) : 0) + 1];
 
@@ -131,7 +131,7 @@ void BWBIP39DeriveKey(void *key64, const char *phrase, const char *passphrase)
     if (phrase) {
         strcpy(salt, "mnemonic");
         if (passphrase) strcpy(salt + strlen("mnemonic"), passphrase);
-        BWPBKDF2(key64, 64, BWSHA512, 512/8, phrase, strlen(phrase), salt, strlen(salt), 2048);
+        BRPBKDF2(key64, 64, BRSHA512, 512/8, phrase, strlen(phrase), salt, strlen(salt), 2048);
         mem_clean(salt, sizeof(salt));
     }
 }

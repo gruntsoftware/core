@@ -1,5 +1,5 @@
 //
-//  BWMerkleBlock.h
+//  BRMerkleBlock.h
 //
 //  Created by Aaron Voisine on 8/6/15.
 //  Copyright (c) 2015 breadwallet LLC
@@ -22,10 +22,10 @@
 //  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 //  THE SOFTWARE.
 
-#ifndef BWMerkleBlock_h
-#define BWMerkleBlock_h
+#ifndef BRMerkleBlock_h
+#define BRMerkleBlock_h
 
-#include "BWInt.h"
+#include "BRInt.h"
 #include <stddef.h>
 #include <inttypes.h>
 
@@ -52,63 +52,63 @@ typedef struct {
     uint8_t *flags;
     size_t flagsLen;
     uint32_t height;
-} BWMerkleBlock;
+} BRMerkleBlock;
 
-#define BW_MERKLE_BLOCK_NONE\
-    ((BWMerkleBlock) { UINT256_ZERO, 0, UINT256_ZERO, UINT256_ZERO, 0, 0, 0, 0, NULL, 0, NULL, 0, 0 })
+#define BR_MERKLE_BLOCK_NONE\
+    ((BRMerkleBlock) { UINT256_ZERO, 0, UINT256_ZERO, UINT256_ZERO, 0, 0, 0, 0, NULL, 0, NULL, 0, 0 })
 
-// returns a newly allocated merkle block struct that must be freed by calling BWMerkleBlockFree()
-BWMerkleBlock *BWMerkleBlockNew(void);
+// returns a newly allocated merkle block struct that must be freed by calling BRMerkleBlockFree()
+BRMerkleBlock *BRMerkleBlockNew(void);
 
-// returns a deep copy of block and that must be freed by calling BWMerkleBlockFree()
-BWMerkleBlock *BWMerkleBlockCopy(const BWMerkleBlock *block);
+// returns a deep copy of block and that must be freed by calling BRMerkleBlockFree()
+BRMerkleBlock *BRMerkleBlockCopy(const BRMerkleBlock *block);
 
 // buf must contain either a serialized merkleblock or header
-// returns a merkle block struct that must be freed by calling BWMerkleBlockFree()
-BWMerkleBlock *BWMerkleBlockParse(const uint8_t *buf, size_t bufLen);
+// returns a merkle block struct that must be freed by calling BRMerkleBlockFree()
+BRMerkleBlock *BRMerkleBlockParse(const uint8_t *buf, size_t bufLen);
 
 // returns number of bytes written to buf, or total bufLen needed if buf is NULL (block->height is not serialized)
-size_t BWMerkleBlockSerialize(const BWMerkleBlock *block, uint8_t *buf, size_t bufLen);
+size_t BRMerkleBlockSerialize(const BRMerkleBlock *block, uint8_t *buf, size_t bufLen);
 
 // populates txHashes with the matched tx hashes in the block
 // returns number of tx hashes written, or the total hashesCount needed if txHashes is NULL
-size_t BWMerkleBlockTxHashes(const BWMerkleBlock *block, UInt256 *txHashes, size_t hashesCount);
+size_t BRMerkleBlockTxHashes(const BRMerkleBlock *block, UInt256 *txHashes, size_t hashesCount);
 
-// sets the hashes and flags fields for a block created with BWMerkleBlockNew()
-void BWMerkleBlockSetTxHashes(BWMerkleBlock *block, const UInt256 hashes[], size_t hashesCount,
+// sets the hashes and flags fields for a block created with BRMerkleBlockNew()
+void BRMerkleBlockSetTxHashes(BRMerkleBlock *block, const UInt256 hashes[], size_t hashesCount,
                               const uint8_t *flags, size_t flagsLen);
 
 // true if merkle tree and timestamp are valid, and proof-of-work matches the stated difficulty target
 // NOTE: this only checks if the block difficulty matches the difficulty target in the header, it does not check if the
-// target is correct for the block's height in the chain - use BWMerkleBlockVerifyDifficulty() for that
-int BWMerkleBlockIsValid(const BWMerkleBlock *block, uint32_t currentTime);
+// target is correct for the block's height in the chain - use BRMerkleBlockVerifyDifficulty() for that
+int BRMerkleBlockIsValid(const BRMerkleBlock *block, uint32_t currentTime);
 
 // true if the given tx hash is known to be included in the block
-int BWMerkleBlockContainsTxHash(const BWMerkleBlock *block, UInt256 txHash);
+int BRMerkleBlockContainsTxHash(const BRMerkleBlock *block, UInt256 txHash);
 
 // verifies the block difficulty target is correct for the block's position in the chain
 // transitionTime is the timestamp of the block at the previous difficulty transition
 // transitionTime may be 0 if block->height is not a multiple of BLOCK_DIFFICULTY_INTERVAL
-int BWMerkleBlockVerifyDifficulty(const BWMerkleBlock *block, const BWMerkleBlock *previous, uint32_t transitionTime);
+int BRMerkleBlockVerifyDifficulty(const BRMerkleBlock *block, const BRMerkleBlock *previous, uint32_t transitionTime);
 
 // returns a hash value for block suitable for use in a hashtable
-inline static size_t BWMerkleBlockHash(const void *block)
+inline static size_t BRMerkleBlockHash(const void *block)
 {
-    return (size_t)((const BWMerkleBlock *)block)->blockHash.u32[0];
+    return (size_t)((const BRMerkleBlock *)block)->blockHash.u32[0];
 }
 
 // true if block and otherBlock have equal blockHash values
-inline static int BWMerkleBlockEq(const void *block, const void *otherBlock)
+inline static int BRMerkleBlockEq(const void *block, const void *otherBlock)
 {
     return (block == otherBlock ||
-            UInt256Eq(((const BWMerkleBlock *)block)->blockHash, ((const BWMerkleBlock *)otherBlock)->blockHash));
+            UInt256Eq(((const BRMerkleBlock *)block)->blockHash, ((const BRMerkleBlock *)otherBlock)->blockHash));
 }
 
 // frees memory allocated for block
-void BWMerkleBlockFree(BWMerkleBlock *block);
+void BRMerkleBlockFree(BRMerkleBlock *block);
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif // BWMerkleBlock_h
+#endif // BRMerkleBlock_h

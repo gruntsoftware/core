@@ -1,5 +1,5 @@
 //
-//  BWBase58.c
+//  BRBase58.c
 //  breadwallet-core
 //
 //  Created by Aaron Voisine on 9/15/15.
@@ -23,8 +23,8 @@
 //  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 //  THE SOFTWARE.
 
-#include "BWBase58.h"
-#include "BWCrypto.h"
+#include "BRBase58.h"
+#include "BRCrypto.h"
 #include <inttypes.h>
 #include <stdlib.h>
 #include <string.h>
@@ -33,7 +33,7 @@
 // base58 and base58check encoding: https://en.bitcoin.it/wiki/Base58Check_encoding
 
 // returns the number of characters written to str including NULL terminator, or total strLen needed if str is NULL
-size_t BWBase58Encode(char *str, size_t strLen, const uint8_t *data, size_t dataLen)
+size_t BRBase58Encode(char *str, size_t strLen, const uint8_t *data, size_t dataLen)
 {
     static const char chars[] = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
     size_t i, j, len, zcount = 0;
@@ -72,7 +72,7 @@ size_t BWBase58Encode(char *str, size_t strLen, const uint8_t *data, size_t data
 }
 
 // returns the number of bytes written to data, or total dataLen needed if data is NULL
-size_t BWBase58Decode(uint8_t *data, size_t dataLen, const char *str)
+size_t BRBase58Decode(uint8_t *data, size_t dataLen, const char *str)
 {
     size_t i = 0, j, len, zcount = 0;
     
@@ -142,7 +142,7 @@ size_t BWBase58Decode(uint8_t *data, size_t dataLen, const char *str)
 }
 
 // returns the number of characters written to str including NULL terminator, or total strLen needed if str is NULL
-size_t BWBase58CheckEncode(char *str, size_t strLen, const uint8_t *data, size_t dataLen)
+size_t BRBase58CheckEncode(char *str, size_t strLen, const uint8_t *data, size_t dataLen)
 {
     size_t len = 0, bufLen = dataLen + 256/8;
     uint8_t _buf[(bufLen <= 0x1000) ? bufLen : 0], *buf = (bufLen <= 0x1000) ? _buf : malloc(bufLen);
@@ -152,8 +152,8 @@ size_t BWBase58CheckEncode(char *str, size_t strLen, const uint8_t *data, size_t
 
     if (data || dataLen == 0) {
         memcpy(buf, data, dataLen);
-        BWSHA256_2(&buf[dataLen], data, dataLen);
-        len = BWBase58Encode(str, strLen, buf, dataLen + 4);
+        BRSHA256_2(&buf[dataLen], data, dataLen);
+        len = BRBase58Encode(str, strLen, buf, dataLen + 4);
     }
     
     mem_clean(buf, bufLen);
@@ -162,18 +162,18 @@ size_t BWBase58CheckEncode(char *str, size_t strLen, const uint8_t *data, size_t
 }
 
 // returns the number of bytes written to data, or total dataLen needed if data is NULL
-size_t BWBase58CheckDecode(uint8_t *data, size_t dataLen, const char *str)
+size_t BRBase58CheckDecode(uint8_t *data, size_t dataLen, const char *str)
 {
     size_t len, bufLen = (str) ? strlen(str) : 0;
     uint8_t md[256/8], _buf[(bufLen <= 0x1000) ? bufLen : 0], *buf = (bufLen <= 0x1000) ? _buf : malloc(bufLen);
 
     assert(str != NULL);
     assert(buf != NULL);
-    len = BWBase58Decode(buf, bufLen, str);
+    len = BRBase58Decode(buf, bufLen, str);
     
     if (len >= 4) {
         len -= 4;
-        BWSHA256_2(md, buf, len);
+        BRSHA256_2(md, buf, len);
         if (memcmp(&buf[len], md, sizeof(uint32_t)) != 0) len = 0; // verify checksum
         if (data && len <= dataLen) memcpy(data, buf, len);
     }

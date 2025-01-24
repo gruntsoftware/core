@@ -1,5 +1,5 @@
 //
-//  BWBIP39WordsEn.h
+//  BRBIP39WordsEn.h
 //
 //  Created by Aaron Voisine on 12/11/15.
 //  Copyright (c) 2015 breadwallet LLC
@@ -22,16 +22,16 @@
 //  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 //  THE SOFTWARE.
 
-#ifndef BWBIP39WordsEn_h
-#define BWBIP39WordsEn_h
+#ifndef BRBIP39WordsEn_h
+#define BRBIP39WordsEn_h
 
-#include "BWBIP39Mnemonic.h"
+#include "BRBIP39Mnemonic.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-static const char *BWBIP39WordsEn[BIP39_WORDLIST_COUNT] = {
+static const char *BRBIP39WordsEn[BIP39_WORDLIST_COUNT] = {
     "abandon",
     "ability",
     "able",
@@ -2086,4 +2086,4 @@ static const char *BWBIP39WordsEn[BIP39_WORDLIST_COUNT] = {
 }
 #endif
 
-#endif // BWBIP39WordsEn_h
+#endif // BRBIP39WordsEn_h

@@ -1,5 +1,5 @@
 //
-//  BWKey.h
+//  BRKey.h
 //
 //  Created by Aaron Voisine on 8/19/15.
 //  Copyright (c) 2015 breadwallet LLC
@@ -22,10 +22,10 @@
 //  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 //  THE SOFTWARE.
 
-#ifndef BWKey_h
-#define BWKey_h
+#ifndef BRKey_h
+#define BRKey_h
 
-#include "BWInt.h"
+#include "BRInt.h"
 #include <stddef.h>
 #include <inttypes.h>
 
@@ -35,82 +35,82 @@ extern "C" {
 
 typedef struct {
     uint8_t p[33];
-} BWECPoint;
+} BRECPoint;
 
 // adds 256bit big endian ints a and b (mod secp256k1 order) and stores the result in a
 // returns true on success
-int BWSecp256k1ModAdd(UInt256 *a, const UInt256 *b);
+int BRSecp256k1ModAdd(UInt256 *a, const UInt256 *b);
 
 // multiplies 256bit big endian ints a and b (mod secp256k1 order) and stores the result in a
 // returns true on success
-int BWSecp256k1ModMul(UInt256 *a, const UInt256 *b);
+int BRSecp256k1ModMul(UInt256 *a, const UInt256 *b);
 
 // multiplies secp256k1 generator by 256bit big endian int i and stores the result in p
 // returns true on success
-int BWSecp256k1PointGen(BWECPoint *p, const UInt256 *i);
+int BRSecp256k1PointGen(BRECPoint *p, const UInt256 *i);
 
 // multiplies secp256k1 generator by 256bit big endian int i and adds the result to ec-point p
 // returns true on success
-int BWSecp256k1PointAdd(BWECPoint *p, const UInt256 *i);
+int BRSecp256k1PointAdd(BRECPoint *p, const UInt256 *i);
 
 // multiplies secp256k1 ec-point p by 256bit big endian int i and stores the result in p
 // returns true on success
-int BWSecp256k1PointMul(BWECPoint *p, const UInt256 *i);
+int BRSecp256k1PointMul(BRECPoint *p, const UInt256 *i);
 
 // returns true if privKey is a valid private key
 // supported formats are wallet import format (WIF), mini private key format, or hex string
-int BWPrivKeyIsValid(const char *privKey);
+int BRPrivKeyIsValid(const char *privKey);
 
 typedef struct {
     UInt256 secret;
     uint8_t pubKey[65];
     int compressed;
-} BWKey;
+} BRKey;
 
 // assigns secret to key and returns true on success
-int BWKeySetSecret(BWKey *key, const UInt256 *secret, int compressed);
+int BRKeySetSecret(BRKey *key, const UInt256 *secret, int compressed);
 
 // assigns privKey to key and returns true on success
 // privKey must be wallet import format (WIF), mini private key format, or hex string
-int BWKeySetPrivKey(BWKey *key, const char *privKey);
+int BRKeySetPrivKey(BRKey *key, const char *privKey);
 
 // assigns DER encoded pubKey to key and returns true on success
-int BWKeySetPubKey(BWKey *key, const uint8_t *pubKey, size_t pkLen);
+int BRKeySetPubKey(BRKey *key, const uint8_t *pubKey, size_t pkLen);
 
 // writes the WIF private key to privKey and returns the number of bytes writen, or pkLen needed if privKey is NULL
 // returns 0 on failure
-size_t BWKeyPrivKey(const BWKey *key, char *privKey, size_t pkLen);
+size_t BRKeyPrivKey(const BRKey *key, char *privKey, size_t pkLen);
 
 // writes the DER encoded public key to pubKey and returns number of bytes written, or pkLen needed if pubKey is NULL
-size_t BWKeyPubKey(BWKey *key, void *pubKey, size_t pkLen);
+size_t BRKeyPubKey(BRKey *key, void *pubKey, size_t pkLen);
 
 // returns the ripemd160 hash of the sha256 hash of the public key, or UINT160_ZERO on error
-UInt160 BWKeyHash160(BWKey *key);
+UInt160 BRKeyHash160(BRKey *key);
 
 // writes the pay-to-pubkey-hash bitcoin address for key to addr
 // returns the number of bytes written, or addrLen needed if addr is NULL
-size_t BWKeyAddress(BWKey *key, char *addr, size_t addrLen);
+size_t BRKeyAddress(BRKey *key, char *addr, size_t addrLen);
 
 // signs md with key and writes signature to sig
 // returns the number of bytes written, or sigLen needed if sig is NULL
 // returns 0 on failure
-size_t BWKeySign(const BWKey *key, void *sig, size_t sigLen, UInt256 md);
+size_t BRKeySign(const BRKey *key, void *sig, size_t sigLen, UInt256 md);
 
 // returns true if the signature for md is verified to have been made by key
-int BWKeyVerify(BWKey *key, UInt256 md, const void *sig, size_t sigLen);
+int BRKeyVerify(BRKey *key, UInt256 md, const void *sig, size_t sigLen);
 
 // wipes key material from key
-void BWKeyClean(BWKey *key);
+void BRKeyClean(BRKey *key);
 
 // Pieter Wuille's compact signature encoding used for bitcoin message signing
 // to verify a compact signature, recover a public key from the signature and verify that it matches the signer's pubkey
-size_t BWKeyCompactSign(const BWKey *key, void *compactSig, size_t sigLen, UInt256 md);
+size_t BRKeyCompactSign(const BRKey *key, void *compactSig, size_t sigLen, UInt256 md);
 
 // assigns pubKey recovered from compactSig to key and returns true on success
-int BWKeyRecoverPubKey(BWKey *key, UInt256 md, const void *compactSig, size_t sigLen);
+int BRKeyRecoverPubKey(BRKey *key, UInt256 md, const void *compactSig, size_t sigLen);
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif // BWKey_h
+#endif // BRKey_h

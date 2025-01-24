@@ -1,5 +1,5 @@
 //
-//  BWBIP32Sequence.h
+//  BRBIP32Sequence.h
 //
 //  Created by Aaron Voisine on 8/19/15.
 //  Copyright (c) 2015 breadwallet LLC
@@ -22,11 +22,11 @@
 //  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 //  THE SOFTWARE.
 
-#ifndef BWBIP32Sequence_h
-#define BWBIP32Sequence_h
+#ifndef BRBIP32Sequence_h
+#define BRBIP32Sequence_h
 
-#include "BWKey.h"
-#include "BWInt.h"
+#include "BRKey.h"
+#include "BRInt.h"
 #include <stdarg.h>
 #include <stddef.h>
 #include <inttypes.h>
@@ -49,56 +49,56 @@ typedef struct {
     uint32_t fingerPrint;
     UInt256 chainCode;
     uint8_t pubKey[33];
-} BWMasterPubKey;
+} BRMasterPubKey;
 
-#define BW_MASTER_PUBKEY_NONE ((BWMasterPubKey) { 0, UINT256_ZERO, \
+#define BR_MASTER_PUBKEY_NONE ((BRMasterPubKey) { 0, UINT256_ZERO, \
     { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 } })
 
 // returns the master public key for the default BIP32 wallet layout - derivation path N(m/0H)
-BWMasterPubKey BWBIP32MasterPubKey(const void *seed, size_t seedLen);
+BRMasterPubKey BRBIP32MasterPubKey(const void *seed, size_t seedLen);
 
 // writes the public key for path N(m/0H/chain/index) to pubKey
 // returns number of bytes written, or pubKeyLen needed if pubKey is NULL
-size_t BWBIP32PubKey(uint8_t *pubKey, size_t pubKeyLen, BWMasterPubKey mpk, uint32_t chain, uint32_t index);
+size_t BRBIP32PubKey(uint8_t *pubKey, size_t pubKeyLen, BRMasterPubKey mpk, uint32_t chain, uint32_t index);
 
 // sets the private key for path m/0H/chain/index to key
-void BWBIP32PrivKey(BWKey *key, const void *seed, size_t seedLen, uint32_t chain, uint32_t index);
+void BRBIP32PrivKey(BRKey *key, const void *seed, size_t seedLen, uint32_t chain, uint32_t index);
 
 // sets the private key for path m/0H/chain/index to each element in keys
-void BWBIP32PrivKeyList(BWKey keys[], size_t keysCount, const void *seed, size_t seedLen, uint32_t chain,
+void BRBIP32PrivKeyList(BRKey keys[], size_t keysCount, const void *seed, size_t seedLen, uint32_t chain,
                         const uint32_t indexes[]);
     
 // sets the private key for the specified path to key
 // depth is the number of arguments used to specify the path
-void BWBIP32PrivKeyPath(BWKey *key, const void *seed, size_t seedLen, int depth, ...);
+void BRBIP32PrivKeyPath(BRKey *key, const void *seed, size_t seedLen, int depth, ...);
 
 // sets the private key for the path specified by vlist to key
 // depth is the number of arguments in vlist
-void BWBIP32vPrivKeyPath(BWKey *key, const void *seed, size_t seedLen, int depth, va_list vlist);
+void BRBIP32vPrivKeyPath(BRKey *key, const void *seed, size_t seedLen, int depth, va_list vlist);
 
 // writes the base58check encoded serialized master private key (xprv) to str
 // returns number of bytes written including NULL terminator, or strLen needed if str is NULL
-size_t BWBIP32SerializeMasterPrivKey(char *str, size_t strLen, const void *seed, size_t seedLen);
+size_t BRBIP32SerializeMasterPrivKey(char *str, size_t strLen, const void *seed, size_t seedLen);
 
 // writes a master private key to seed given a base58check encoded serialized master private key (xprv)
 // returns number of bytes written, or seedLen needed if seed is NULL
-size_t BWBIP32ParseMasterPrivKey(void *seed, size_t seedLen, const char *str);
+size_t BRBIP32ParseMasterPrivKey(void *seed, size_t seedLen, const char *str);
 
 // writes the base58check encoded serialized master public key (xpub) to str
 // returns number of bytes written including NULL terminator, or strLen needed if str is NULL
-size_t BWBIP32SerializeMasterPubKey(char *str, size_t strLen, BWMasterPubKey mpk);
+size_t BRBIP32SerializeMasterPubKey(char *str, size_t strLen, BRMasterPubKey mpk);
 
 // returns a master public key give a base58check encoded serialized master public key (xpub)
-BWMasterPubKey BWBIP32ParseMasterPubKey(const char *str);
+BRMasterPubKey BRBIP32ParseMasterPubKey(const char *str);
 
 // key used for authenticated API calls, i.e. bitauth: https://github.com/bitpay/bitauth - path m/1H/0
-void BWBIP32APIAuthKey(BWKey *key, const void *seed, size_t seedLen);
+void BRBIP32APIAuthKey(BRKey *key, const void *seed, size_t seedLen);
 
 // key used for BitID: https://github.com/bitid/bitid/blob/master/BIP_draft.md
-void BWBIP32BitIDKey(BWKey *key, const void *seed, size_t seedLen, uint32_t index, const char *uri);
+void BRBIP32BitIDKey(BRKey *key, const void *seed, size_t seedLen, uint32_t index, const char *uri);
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif // BWBIP32Sequence_h
+#endif // BRBIP32Sequence_h

@@ -1,5 +1,5 @@
 //
-//  BWBech32.c
+//  BRBech32.c
 //
 //  Created by Aaron Voisine on 1/20/18.
 //  Copyright (c) 2018 breadwallet LLC
@@ -22,9 +22,9 @@
 //  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 //  THE SOFTWARE.
 
-#include "BWBech32.h"
-#include "BWAddress.h"
-#include "BWCrypto.h"
+#include "BRBech32.h"
+#include "BRAddress.h"
+#include "BRCrypto.h"
 #include <inttypes.h>
 #include <stdlib.h>
 #include <string.h>
@@ -38,7 +38,7 @@
                     (-(((x) >> 28) & 1) & 0x3d4233dd) ^ (-(((x) >> 29) & 1) & 0x2a1462b3))
 
 // returns the number of bytes written to data42 (maximum of 42)
-size_t BWBech32Decode(char *hrp84, uint8_t *data42, const char *addr)
+size_t BRBech32Decode(char *hrp84, uint8_t *data42, const char *addr)
 {
     size_t i, j, bufLen, addrLen, sep;
     uint32_t x, chk = 1;
@@ -97,7 +97,7 @@ size_t BWBech32Decode(char *hrp84, uint8_t *data42, const char *addr)
 
 // data must contain a valid BIP141 witness program
 // returns the number of bytes written to addr91 (maximum of 91)
-size_t BWBech32Encode(char *addr91, const char *hrp, const uint8_t data[])
+size_t BRBech32Encode(char *addr91, const char *hrp, const uint8_t data[])
 {
     static const char chars[] = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
     char addr[91];

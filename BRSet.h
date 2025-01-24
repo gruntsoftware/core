@@ -1,5 +1,5 @@
 //
-//  BWSet.h
+//  BRSet.h
 //
 //  Created by Aaron Voisine on 9/11/15.
 //  Copyright (c) 2015 breadwallet LLC
@@ -22,8 +22,8 @@
 //  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 //  THE SOFTWARE.
 
-#ifndef BWSet_h
-#define BWSet_h
+#ifndef BRSet_h
+#define BRSet_h
 
 #include <stddef.h>
 #include <inttypes.h>
@@ -32,60 +32,60 @@
 extern "C" {
 #endif
 
-typedef struct BWSetStruct BWSet;
+typedef struct BRSetStruct BRSet;
 
-// retruns a newly allocated empty set that must be freed by calling BWSetFree()
+// retruns a newly allocated empty set that must be freed by calling BRSetFree()
 // size_t hash(const void *) is a function that returns a hash value for a given set item
 // int eq(const void *, const void *) is a function that returns true if two set items are equal
 // any two items that are equal must also have identical hash values
 // capacity is the initial number of items the set can hold, which will be auto-increased as needed
-BWSet *BWSetNew(size_t (*hash)(const void *), int (*eq)(const void *, const void *), size_t capacity);
+BRSet *BRSetNew(size_t (*hash)(const void *), int (*eq)(const void *, const void *), size_t capacity);
 
 // adds given item to set or replaces an equivalent existing item and returns item replaced if any
-void *BWSetAdd(BWSet *set, void *item);
+void *BRSetAdd(BRSet *set, void *item);
 
 // removes item equivalent to given item from set and returns item removed if any
-void *BWSetRemove(BWSet *set, const void *item);
+void *BRSetRemove(BRSet *set, const void *item);
 
 // removes all items from set
-void BWSetClear(BWSet *set);
+void BRSetClear(BRSet *set);
 
 // returns the number of items in set
-size_t BWSetCount(const BWSet *set);
+size_t BRSetCount(const BRSet *set);
 
 // true if an item equivalant to the given item is contained in set
-int BWSetContains(const BWSet *set, const void *item);
+int BRSetContains(const BRSet *set, const void *item);
 
 // true if any items in otherSet are contained in set
-int BWSetIntersects(const BWSet *set, const BWSet *otherSet);
+int BRSetIntersects(const BRSet *set, const BRSet *otherSet);
 
 // returns member item from set equivalent to given item, or NULL if there is none
-void *BWSetGet(const BWSet *set, const void *item);
+void *BRSetGet(const BRSet *set, const void *item);
 
 // interates over set and returns the next item after previous, or NULL if no more items are available
 // if previous is NULL, an initial item is returned
-void *BWSetIterate(const BWSet *set, const void *previous);
+void *BRSetIterate(const BRSet *set, const void *previous);
 
 // writes up to count items from set to allItems and returns number of items written
-size_t BWSetAll(const BWSet *set, void *allItems[], size_t count);
+size_t BRSetAll(const BRSet *set, void *allItems[], size_t count);
 
 // calls apply() with each item in set
-void BWSetApply(const BWSet *set, void *info, void (*apply)(void *info, void *item));
+void BRSetApply(const BRSet *set, void *info, void (*apply)(void *info, void *item));
 
 // adds or replaces items from otherSet into set
-void BWSetUnion(BWSet *set, const BWSet *otherSet);
+void BRSetUnion(BRSet *set, const BRSet *otherSet);
 
 // removes items contained in otherSet from set
-void BWSetMinus(BWSet *set, const BWSet *otherSet);
+void BRSetMinus(BRSet *set, const BRSet *otherSet);
 
 // removes items not contained in otherSet from set
-void BWSetIntersect(BWSet *set, const BWSet *otherSet);
+void BRSetIntersect(BRSet *set, const BRSet *otherSet);
 
 // frees memory allocated for set
-void BWSetFree(BWSet *set);
+void BRSetFree(BRSet *set);
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif // BWSet_h
+#endif // BRSet_h

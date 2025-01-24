@@ -1,5 +1,5 @@
 //
-//  BWChainParams.h
+//  BRChainParams.h
 //
 //  Created by Aaron Voisine on 1/10/18.
 //  Copyright (c) 2019 breadwallet LLC
@@ -22,11 +22,11 @@
 //  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 //  THE SOFTWARE.
 
-#ifndef BWChainParams_h
-#define BWChainParams_h
+#ifndef BRChainParams_h
+#define BRChainParams_h
 
-#include "BWMerkleBlock.h"
-#include "BWSet.h"
+#include "BRMerkleBlock.h"
+#include "BRSet.h"
 #include <assert.h>
 
 typedef struct {
@@ -34,29 +34,29 @@ typedef struct {
     UInt256 hash;
     uint32_t timestamp;
     uint32_t target;
-} BWCheckPoint;
+} BRCheckPoint;
 
 typedef struct {
     const char * const *dnsSeeds; // NULL terminated array of dns seeds
     uint16_t standardPort;
     uint32_t magicNumber;
     uint64_t services;
-    int (*verifyDifficulty)(const BWMerkleBlock *block, const BWSet *blockSet); // blockSet must have last 2016 blocks
-    const BWCheckPoint *checkpoints;
+    int (*verifyDifficulty)(const BRMerkleBlock *block, const BRSet *blockSet); // blockSet must have last 2016 blocks
+    const BRCheckPoint *checkpoints;
     size_t checkpointsCount;
-} BWChainParams;
+} BRChainParams;
 
-static const char *BWMainNetDNSSeeds[] = {
+static const char *BRMainNetDNSSeeds[] = {
     "dnsseed.litecoinpool.org.", "seed-a.litecoin.loshan.co.uk.", "dnsseed.thrasher.io.",
     "dnsseed.koin-project.com.", "dnsseed.litecointools.com.", NULL};
 
-static const char *BWTestNetDNSSeeds[] = {
+static const char *BRTestNetDNSSeeds[] = {
     "testnet-seed.ltc.xurious.com.", "seed-b.litecoin.loshan.co.uk.", "dnsseed-testnet.thrasher.io.", NULL
 };
 
 // blockchain checkpoints - these are also used as starting points for partial chain downloads, so they must be at
 // difficulty transition boundaries in order to verify the block difficulty at the immediately following transition
-static const BWCheckPoint BWMainNetCheckpoints[] = {
+static const BRCheckPoint BRMainNetCheckpoints[] = {
     {       0, uint256("12a765e31ffd4059bada1e25190f6e98c99d9714d334efa41a195a7e7e04bfe2"), 1317972665, 0x1e0ffff0 },
     {   20160, uint256("633036c8df655531c2449b2d09b264cc0b49d945a89be23fd3c1a97361ca198c"), 1319798300, 0x1d055262 },
     {   40320, uint256("d148cdd2cf44069cef4b63f0feaf30a8d291ca9ea9ba7e83f226b9738c1d5e9c"), 1322522019, 0x1d018053 },
@@ -87,14 +87,14 @@ static const BWCheckPoint BWMainNetCheckpoints[] = {
 	{ 2036160, uint256("97ab7a0bf3cd7d694c1b369090aea9449e93f92763808de2a073cc8ab0657292"), 1618643881, 0x1a01ab48 }
 };
 
-static const BWCheckPoint BWTestNetCheckpoints[] = {
+static const BRCheckPoint BRTestNetCheckpoints[] = {
     {       0, uint256("4966625a4b2851d9fdee139e56211a0d88575f59ed816ff5e6a63deb4e3e29a0"), 1486949366, 0x1e0ffff0 },
 	{ 2282112, uint256("b64455a7630d72d982d7e00966e04e3c148a482d2f2b52e20bd7acc3aadbcd69"), 1649496420, 0x1e03ffff }
 };
 
-static int BWMainNetVerifyDifficulty(const BWMerkleBlock *block, const BWSet *blockSet)
+static int BRMainNetVerifyDifficulty(const BRMerkleBlock *block, const BRSet *blockSet)
 {
-    // const BWMerkleBlock *previous, *b = NULL;
+    // const BRMerkleBlock *previous, *b = NULL;
     // uint32_t i;
 
     // assert(block != NULL);
@@ -103,36 +103,36 @@ static int BWMainNetVerifyDifficulty(const BWMerkleBlock *block, const BWSet *bl
     // // check if we hit a difficulty transition, and find previous transition block
     // if ((block->height % BLOCK_DIFFICULTY_INTERVAL) == 0) {
     //     for (i = 0, b = block; b && i < BLOCK_DIFFICULTY_INTERVAL; i++) {
-    //         b = BWSetGet(blockSet, &b->prevBlock);
+    //         b = BRSetGet(blockSet, &b->prevBlock);
     //     }
     // }
 
-    // previous = BWSetGet(blockSet, &block->prevBlock);
-    // return BWMerkleBlockVerifyDifficulty(block, previous, (b) ? b->timestamp : 0);
+    // previous = BRSetGet(blockSet, &block->prevBlock);
+    // return BRMerkleBlockVerifyDifficulty(block, previous, (b) ? b->timestamp : 0);
     return 1;
 }
 
-static int BWTestNetVerifyDifficulty(const BWMerkleBlock *block, const BWSet *blockSet)
+static int BRTestNetVerifyDifficulty(const BRMerkleBlock *block, const BRSet *blockSet)
 {
     return 1; // XXX skip testnet difficulty check for now
 }
 
-static const BWChainParams BWMainNetParams = {
-    BWMainNetDNSSeeds,
+static const BRChainParams BRMainNetParams = {
+    BRMainNetDNSSeeds,
     9333,       // standardPort
     0xdbb6c0fb, // magicNumber
     0,          // services
-    BWMainNetVerifyDifficulty,
-    BWMainNetCheckpoints,
-    sizeof(BWMainNetCheckpoints) / sizeof(*BWMainNetCheckpoints)};
+    BRMainNetVerifyDifficulty,
+    BRMainNetCheckpoints,
+    sizeof(BRMainNetCheckpoints) / sizeof(*BRMainNetCheckpoints)};
 
-static const BWChainParams BWTestNetParams = {
-    BWTestNetDNSSeeds,
+static const BRChainParams BRTestNetParams = {
+    BRTestNetDNSSeeds,
     19335,      // standardPort
     0xf1c8d2fd, // magicNumber
     0,          // services
-    BWTestNetVerifyDifficulty,
-    BWTestNetCheckpoints,
-    sizeof(BWTestNetCheckpoints) / sizeof(*BWTestNetCheckpoints)};
+    BRTestNetVerifyDifficulty,
+    BRTestNetCheckpoints,
+    sizeof(BRTestNetCheckpoints) / sizeof(*BRTestNetCheckpoints)};
 
-#endif // BWChainParams_h
+#endif // BRChainParams_h

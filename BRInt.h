@@ -1,5 +1,5 @@
 //
-//  BWInt.h
+//  BRInt.h
 //
 //  Created by Aaron Voisine on 8/16/15.
 //  Copyright (c) 2015 breadwallet LLC.
@@ -22,8 +22,8 @@
 //  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 //  THE SOFTWARE.
 
-#ifndef BWInt_h
-#define BWInt_h
+#ifndef BRInt_h
+#define BRInt_h
 
 #include <inttypes.h>
 
@@ -296,4 +296,4 @@ inline static UInt256 UInt256Get(const void *b32)
 }
 #endif
 
-#endif // BWInt_h
+#endif // BRInt_h

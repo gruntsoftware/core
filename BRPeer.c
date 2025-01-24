@@ -1,5 +1,5 @@
 //
-//  BWPeer.c
+//  BRPeer.c
 //
 //  Created by Aaron Voisine on 9/2/15.
 //  Copyright (c) 2015 breadwallet LLC.
@@ -22,13 +22,13 @@
 //  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 //  THE SOFTWARE.
 
-#include "BWPeer.h"
-#include "BWMerkleBlock.h"
-#include "BWAddress.h"
-#include "BWSet.h"
-#include "BWArray.h"
-#include "BWCrypto.h"
-#include "BWInt.h"
+#include "BRPeer.h"
+#include "BRMerkleBlock.h"
+#include "BRAddress.h"
+#include "BRSet.h"
+#include "BRArray.h"
+#include "BRCrypto.h"
+#include "BRInt.h"
 #include <stdlib.h>
 #include <float.h>
 #include <inttypes.h>
@@ -89,10 +89,10 @@ typedef enum {
 } inv_type;
 
 typedef struct {
-    BWPeer peer; // superstruct on top of BWPeer
+    BRPeer peer; // superstruct on top of BRPeer
     uint32_t magicNumber;
     char host[INET6_ADDRSTRLEN];
-    BWPeerStatus status;
+    BRPeerStatus status;
     int waitingForNetwork;
     volatile int needsFilterUpdate;
     uint64_t nonce, feePerKb;
@@ -102,22 +102,22 @@ typedef struct {
     volatile double disconnectTime, mempoolTime;
     int sentVerack, gotVerack, sentGetaddr, sentFilter, sentGetdata, sentMempool, sentGetblocks;
     UInt256 lastBlockHash;
-    BWMerkleBlock *currentBlock;
+    BRMerkleBlock *currentBlock;
     UInt256 *currentBlockTxHashes, *knownBlockHashes, *knownTxHashes;
-    BWSet *knownTxHashSet;
+    BRSet *knownTxHashSet;
     volatile int socket;
     void *info;
     void (*connected)(void *info);
     void (*disconnected)(void *info, int error);
-    void (*relayedPeers)(void *info, const BWPeer peers[], size_t peersCount);
-    void (*relayedTx)(void *info, BWTransaction *tx);
+    void (*relayedPeers)(void *info, const BRPeer peers[], size_t peersCount);
+    void (*relayedTx)(void *info, BRTransaction *tx);
     void (*hasTx)(void *info, UInt256 txHash);
     void (*rejectedTx)(void *info, UInt256 txHash, uint8_t code);
-    void (*relayedBlock)(void *info, BWMerkleBlock *block);
+    void (*relayedBlock)(void *info, BRMerkleBlock *block);
     void (*notfound)(void *info, const UInt256 txHashes[], size_t txCount, const UInt256 blockHashes[],
                      size_t blockCount);
     void (*setFeePerKb)(void *info, uint64_t feePerKb);
-    BWTransaction *(*requestedTx)(void *info, UInt256 txHash);
+    BRTransaction *(*requestedTx)(void *info, UInt256 txHash);
     int (*networkIsReachable)(void *info);
     void (*threadCleanup)(void *info);
     void **volatile pongInfo;
@@ -125,53 +125,53 @@ typedef struct {
     void *volatile mempoolInfo;
     void (*volatile mempoolCallback)(void *info, int success);
     pthread_t thread;
-} BWPeerContext;
+} BRPeerContext;
 
-void BWPeerSendVersionMessage(BWPeer *peer);
-void BWPeerSendVerackMessage(BWPeer *peer);
-void BWPeerSendAddr(BWPeer *peer);
+void BRPeerSendVersionMessage(BRPeer *peer);
+void BRPeerSendVerackMessage(BRPeer *peer);
+void BRPeerSendAddr(BRPeer *peer);
 
-inline static int _BWPeerIsIPv4(const BWPeer *peer)
+inline static int _BRPeerIsIPv4(const BRPeer *peer)
 {
     return (peer->address.u64[0] == 0 && peer->address.u16[4] == 0 && peer->address.u16[5] == 0xffff);
 }
 
-static void _BWPeerAddKnownTxHashes(const BWPeer *peer, const UInt256 txHashes[], size_t txCount)
+static void _BRPeerAddKnownTxHashes(const BRPeer *peer, const UInt256 txHashes[], size_t txCount)
 {
-    BWPeerContext *ctx = (BWPeerContext *)peer;
+    BRPeerContext *ctx = (BRPeerContext *)peer;
     UInt256 *knownTxHashes = ctx->knownTxHashes;
     size_t i, j;
     
     for (i = 0; i < txCount; i++) {
-        if (! BWSetContains(ctx->knownTxHashSet, &txHashes[i])) {
+        if (! BRSetContains(ctx->knownTxHashSet, &txHashes[i])) {
             array_add(knownTxHashes, txHashes[i]);
             
             if (ctx->knownTxHashes != knownTxHashes) { // check if knownTxHashes was moved to a new memory location
                 ctx->knownTxHashes = knownTxHashes;
-                BWSetClear(ctx->knownTxHashSet);
-                for (j = array_count(knownTxHashes); j > 0; j--) BWSetAdd(ctx->knownTxHashSet, &knownTxHashes[j - 1]);
+                BRSetClear(ctx->knownTxHashSet);
+                for (j = array_count(knownTxHashes); j > 0; j--) BRSetAdd(ctx->knownTxHashSet, &knownTxHashes[j - 1]);
             }
-            else BWSetAdd(ctx->knownTxHashSet, &knownTxHashes[array_count(knownTxHashes) - 1]);
+            else BRSetAdd(ctx->knownTxHashSet, &knownTxHashes[array_count(knownTxHashes) - 1]);
         }
     }
 }
 
-static void _BWPeerDidConnect(BWPeer *peer)
+static void _BRPeerDidConnect(BRPeer *peer)
 {
-    BWPeerContext *ctx = (BWPeerContext *)peer;
+    BRPeerContext *ctx = (BRPeerContext *)peer;
     
-    if (ctx->status == BWPeerStatusConnecting && ctx->sentVerack && ctx->gotVerack) {
+    if (ctx->status == BRPeerStatusConnecting && ctx->sentVerack && ctx->gotVerack) {
         peer_log(peer, "handshake completed");
         ctx->disconnectTime = DBL_MAX;
-        ctx->status = BWPeerStatusConnected;
+        ctx->status = BRPeerStatusConnected;
         peer_log(peer, "connected with lastblock: %"PRIu32, ctx->lastblock);
         if (ctx->connected) ctx->connected(ctx->info);
     }
 }
 
-static int _BWPeerAcceptVersionMessage(BWPeer *peer, const uint8_t *msg, size_t msgLen)
+static int _BRPeerAcceptVersionMessage(BRPeer *peer, const uint8_t *msg, size_t msgLen)
 {
-    BWPeerContext *ctx = (BWPeerContext *)peer;
+    BRPeerContext *ctx = (BRPeerContext *)peer;
     size_t off = 0, strLen = 0, len = 0;
     uint64_t recvServices, fromServices, nonce;
     UInt128 recvAddr, fromAddr;
@@ -203,7 +203,7 @@ static int _BWPeerAcceptVersionMessage(BWPeer *peer, const uint8_t *msg, size_t 
         off += sizeof(uint16_t);
         nonce = UInt64GetLE(&msg[off]);
         off += sizeof(uint64_t);
-        strLen = (size_t)BWVarInt(&msg[off], (off <= msgLen ? msgLen - off : 0), &len);
+        strLen = (size_t)BRVarInt(&msg[off], (off <= msgLen ? msgLen - off : 0), &len);
         off += len;
 
         if (off + strLen + sizeof(uint32_t) > msgLen) {
@@ -224,16 +224,16 @@ static int _BWPeerAcceptVersionMessage(BWPeer *peer, const uint8_t *msg, size_t 
             off += sizeof(uint32_t);
             peer_log(peer, "got version %"PRIu32", services %"PRIx64", useragent:\"%s\"", ctx->version, peer->services,
                      ctx->useragent);
-            BWPeerSendVerackMessage(peer);
+            BRPeerSendVerackMessage(peer);
         }
     }
     
     return r;
 }
 
-static int _BWPeerAcceptVerackMessage(BWPeer *peer, const uint8_t *msg, size_t msgLen)
+static int _BRPeerAcceptVerackMessage(BRPeer *peer, const uint8_t *msg, size_t msgLen)
 {
-    BWPeerContext *ctx = (BWPeerContext *)peer;
+    BRPeerContext *ctx = (BRPeerContext *)peer;
     struct timeval tv;
     int r = 1;
     
@@ -246,29 +246,29 @@ static int _BWPeerAcceptVerackMessage(BWPeer *peer, const uint8_t *msg, size_t m
         ctx->startTime = 0;
         peer_log(peer, "got verack in %fs", ctx->pingTime);
         ctx->gotVerack = 1;
-        _BWPeerDidConnect(peer);
+        _BRPeerDidConnect(peer);
     }
     
     return r;
 }
 
 // TODO: relay addresses
-static int _BWPeerAcceptAddrMessage(BWPeer *peer, const uint8_t *msg, size_t msgLen)
+static int _BRPeerAcceptAddrMessage(BRPeer *peer, const uint8_t *msg, size_t msgLen)
 {
-    BWPeerContext *ctx = (BWPeerContext *)peer;
-    size_t off = 0, count = (size_t)BWVarInt(msg, msgLen, &off);
+    BRPeerContext *ctx = (BRPeerContext *)peer;
+    size_t off = 0, count = (size_t)BRVarInt(msg, msgLen, &off);
     int r = 1;
     
     if (off == 0 || off + count*30 > msgLen) {
         peer_log(peer, "malformed addr message, length is %zu, should be %zu for %zu address(es)", msgLen,
-                 BWVarIntSize(count) + 30*count, count);
+                 BRVarIntSize(count) + 30*count, count);
         r = 0;
     }
     else if (count > 1000) {
         peer_log(peer, "dropping addr message, %zu is too many addresses, max is 1000", count);
     }
     else if (ctx->sentGetaddr) { // simple anti-tarpitting tactic, don't accept unsolicited addresses
-        BWPeer peers[count], p;
+        BRPeer peers[count], p;
         size_t peersCount = 0;
         time_t now = time(NULL);
         
@@ -285,7 +285,7 @@ static int _BWPeerAcceptAddrMessage(BWPeer *peer, const uint8_t *msg, size_t msg
             off += sizeof(uint16_t);
 
             if (! (p.services & SERVICES_NODE_NETWORK)) continue; // skip peers that don't carry full blocks
-            if (! _BWPeerIsIPv4(&p)) continue; // ignore IPv6 for now
+            if (! _BRPeerIsIPv4(&p)) continue; // ignore IPv6 for now
         
             // if address time is more than 10 min in the future or unknown, set to 5 days old
             if (p.timestamp > now + 10*60 || p.timestamp == 0) p.timestamp = now - 5*24*60*60;
@@ -299,15 +299,15 @@ static int _BWPeerAcceptAddrMessage(BWPeer *peer, const uint8_t *msg, size_t msg
     return r;
 }
 
-static int _BWPeerAcceptInvMessage(BWPeer *peer, const uint8_t *msg, size_t msgLen)
+static int _BRPeerAcceptInvMessage(BRPeer *peer, const uint8_t *msg, size_t msgLen)
 {
-    BWPeerContext *ctx = (BWPeerContext *)peer;
-    size_t off = 0, count = (size_t)BWVarInt(msg, msgLen, &off);
+    BRPeerContext *ctx = (BRPeerContext *)peer;
+    size_t off = 0, count = (size_t)BRVarInt(msg, msgLen, &off);
     int r = 1;
     
     if (off == 0 || off + count*36 > msgLen) {
         peer_log(peer, "malformed inv message, length is %zu, should be %zu for %zu item(s)", msgLen,
-                 BWVarIntSize(count) + 36*count, count);
+                 BRVarIntSize(count) + 36*count, count);
         r = 0;
     }
     else if (count > MAX_GETDATA_HASHES) {
@@ -367,25 +367,25 @@ static int _BWPeerAcceptInvMessage(BWPeer *peer, const uint8_t *msg, size_t msgL
             for (i = 0, j = 0; i < txCount; i++) {
                 hash = UInt256Get(transactions[i]);
                 
-                if (BWSetContains(ctx->knownTxHashSet, &hash)) {
+                if (BRSetContains(ctx->knownTxHashSet, &hash)) {
                     if (ctx->hasTx) ctx->hasTx(ctx->info, hash);
                 }
                 else txHashes[j++] = hash;
             }
             
-            _BWPeerAddKnownTxHashes(peer, txHashes, j);
-            if (j > 0 || blockCount > 0) BWPeerSendGetdata(peer, txHashes, j, blockHashes, blockCount);
+            _BRPeerAddKnownTxHashes(peer, txHashes, j);
+            if (j > 0 || blockCount > 0) BRPeerSendGetdata(peer, txHashes, j, blockHashes, blockCount);
     
             // to improve chain download performance, if we received 500 block hashes, request the next 500 block hashes
             if (blockCount >= 500) {
                 UInt256 locators[] = { blockHashes[blockCount - 1], blockHashes[0] };
             
-                BWPeerSendGetblocks(peer, locators, 2, UINT256_ZERO);
+                BRPeerSendGetblocks(peer, locators, 2, UINT256_ZERO);
             }
             
             if (txCount > 0 && ctx->mempoolCallback) {
                 peer_log(peer, "got initial mempool response");
-                BWPeerSendPing(peer, ctx->mempoolInfo, ctx->mempoolCallback);
+                BRPeerSendPing(peer, ctx->mempoolInfo, ctx->mempoolCallback);
                 ctx->mempoolCallback = NULL;
                 ctx->mempoolTime = DBL_MAX;
             }
@@ -395,10 +395,10 @@ static int _BWPeerAcceptInvMessage(BWPeer *peer, const uint8_t *msg, size_t msgL
     return r;
 }
 
-static int _BWPeerAcceptTxMessage(BWPeer *peer, const uint8_t *msg, size_t msgLen)
+static int _BRPeerAcceptTxMessage(BRPeer *peer, const uint8_t *msg, size_t msgLen)
 {
-    BWPeerContext *ctx = (BWPeerContext *)peer;
-    BWTransaction *tx = BWTransactionParse(msg, msgLen);
+    BRPeerContext *ctx = (BRPeerContext *)peer;
+    BRTransaction *tx = BRTransactionParse(msg, msgLen);
     UInt256 txHash;
     int r = 1;
 
@@ -408,7 +408,7 @@ static int _BWPeerAcceptTxMessage(BWPeer *peer, const uint8_t *msg, size_t msgLe
     }
     else if (! ctx->sentFilter && ! ctx->sentGetdata) {
         peer_log(peer, "got tx message before loading filter");
-        BWTransactionFree(tx);
+        BRTransactionFree(tx);
         r = 0;
     }
     else {
@@ -418,7 +418,7 @@ static int _BWPeerAcceptTxMessage(BWPeer *peer, const uint8_t *msg, size_t msgLe
         if (ctx->relayedTx) {
             ctx->relayedTx(ctx->info, tx);
         }
-        else BWTransactionFree(tx);
+        else BRTransactionFree(tx);
 
         if (ctx->currentBlock) { // we're collecting tx messages for a merkleblock
             for (size_t i = array_count(ctx->currentBlockTxHashes); i > 0; i--) {
@@ -428,7 +428,7 @@ static int _BWPeerAcceptTxMessage(BWPeer *peer, const uint8_t *msg, size_t msgLe
             }
         
             if (array_count(ctx->currentBlockTxHashes) == 0) { // we received the entire block including all matched tx
-                BWMerkleBlock *block = ctx->currentBlock;
+                BRMerkleBlock *block = ctx->currentBlock;
             
                 ctx->currentBlock = NULL;
                 if (ctx->relayedBlock) ctx->relayedBlock(ctx->info, block);
@@ -439,15 +439,15 @@ static int _BWPeerAcceptTxMessage(BWPeer *peer, const uint8_t *msg, size_t msgLe
     return r;
 }
 
-static int _BWPeerAcceptHeadersMessage(BWPeer *peer, const uint8_t *msg, size_t msgLen)
+static int _BRPeerAcceptHeadersMessage(BRPeer *peer, const uint8_t *msg, size_t msgLen)
 {
-    BWPeerContext *ctx = (BWPeerContext *)peer;
-    size_t off = 0, count = (size_t)BWVarInt(msg, msgLen, &off);
+    BRPeerContext *ctx = (BRPeerContext *)peer;
+    size_t off = 0, count = (size_t)BRVarInt(msg, msgLen, &off);
     int r = 1;
 
     if (off == 0 || off + 81*count > msgLen) {
         peer_log(peer, "malformed headers message, length is %zu, should be %zu for %zu header(s)", msgLen,
-                 BWVarIntSize(count) + 81*count, count);
+                 BRVarIntSize(count) + 81*count, count);
         r = 0;
     }
     else {
@@ -462,8 +462,8 @@ static int _BWPeerAcceptHeadersMessage(BWPeer *peer, const uint8_t *msg, size_t 
             time_t now = time(NULL);
             UInt256 locators[2];
             
-            BWSHA256_2(&locators[0], &msg[off + 81*(count - 1)], 80);
-            BWSHA256_2(&locators[1], &msg[off], 80);
+            BRSHA256_2(&locators[0], &msg[off + 81*(count - 1)], 80);
+            BRSHA256_2(&locators[1], &msg[off], 80);
 
             if (timestamp > 0 && timestamp + 7*24*60*60 + BLOCK_MAX_TIME_DRIFT >= ctx->earliestKeyTime) {
                 // request blocks for the remainder of the chain
@@ -473,23 +473,23 @@ static int _BWPeerAcceptHeadersMessage(BWPeer *peer, const uint8_t *msg, size_t 
                     timestamp = (++last < count) ? UInt32GetLE(&msg[off + 81*last + 68]) : 0;
                 }
                 
-                BWSHA256_2(&locators[0], &msg[off + 81*(last - 1)], 80);
-                BWPeerSendGetblocks(peer, locators, 2, UINT256_ZERO);
+                BRSHA256_2(&locators[0], &msg[off + 81*(last - 1)], 80);
+                BRPeerSendGetblocks(peer, locators, 2, UINT256_ZERO);
             }
-            else BWPeerSendGetheaders(peer, locators, 2, UINT256_ZERO);
+            else BRPeerSendGetheaders(peer, locators, 2, UINT256_ZERO);
 
             for (size_t i = 0; r && i < count; i++) {
-                BWMerkleBlock *block = BWMerkleBlockParse(&msg[off + 81*i], 81);
+                BRMerkleBlock *block = BRMerkleBlockParse(&msg[off + 81*i], 81);
                 
-                if (! BWMerkleBlockIsValid(block, (uint32_t)now)) {
+                if (! BRMerkleBlockIsValid(block, (uint32_t)now)) {
                     peer_log(peer, "invalid block header: %s", u256hex(block->blockHash));
-                    BWMerkleBlockFree(block);
+                    BRMerkleBlockFree(block);
                     r = 0;
                 }
                 else if (ctx->relayedBlock) {
                     ctx->relayedBlock(ctx->info, block);
                 }
-                else BWMerkleBlockFree(block);
+                else BRMerkleBlockFree(block);
             }
         }
         else {
@@ -501,22 +501,22 @@ static int _BWPeerAcceptHeadersMessage(BWPeer *peer, const uint8_t *msg, size_t 
     return r;
 }
 
-static int _BWPeerAcceptGetaddrMessage(BWPeer *peer, const uint8_t *msg, size_t msgLen)
+static int _BRPeerAcceptGetaddrMessage(BRPeer *peer, const uint8_t *msg, size_t msgLen)
 {
     peer_log(peer, "got getaddr");
-    BWPeerSendAddr(peer);
+    BRPeerSendAddr(peer);
     return 1;
 }
 
-static int _BWPeerAcceptGetdataMessage(BWPeer *peer, const uint8_t *msg, size_t msgLen)
+static int _BRPeerAcceptGetdataMessage(BRPeer *peer, const uint8_t *msg, size_t msgLen)
 {
-    BWPeerContext *ctx = (BWPeerContext *)peer;
-    size_t off = 0, count = (size_t)BWVarInt(msg, msgLen, &off);
+    BRPeerContext *ctx = (BRPeerContext *)peer;
+    size_t off = 0, count = (size_t)BRVarInt(msg, msgLen, &off);
     int r = 1;
     
     if (off == 0 || off + 36*count > msgLen) {
         peer_log(peer, "malformed getdata message, length is %zu, should %zu for %zu item(s)", msgLen,
-                 BWVarIntSize(count) + 36*count, count);
+                 BRVarIntSize(count) + 36*count, count);
         r = 0;
     }
     else if (count > MAX_GETDATA_HASHES) {
@@ -524,7 +524,7 @@ static int _BWPeerAcceptGetdataMessage(BWPeer *peer, const uint8_t *msg, size_t 
     }
     else {
         struct inv_item { uint8_t item[36]; } *notfound = NULL;
-        BWTransaction *tx = NULL;
+        BRTransaction *tx = NULL;
         
         peer_log(peer, "got getdata with %zu item(s)", count);
         
@@ -536,9 +536,9 @@ static int _BWPeerAcceptGetdataMessage(BWPeer *peer, const uint8_t *msg, size_t 
                 case inv_tx:
                     if (ctx->requestedTx) tx = ctx->requestedTx(ctx->info, hash);
 
-                    if (tx && BWTransactionSize(tx) < TX_MAX_SIZE) {
-                        uint8_t buf[BWTransactionSerialize(tx, NULL, 0)];
-                        size_t bufLen = BWTransactionSerialize(tx, buf, sizeof(buf));
+                    if (tx && BRTransactionSize(tx) < TX_MAX_SIZE) {
+                        uint8_t buf[BRTransactionSerialize(tx, NULL, 0)];
+                        size_t bufLen = BRTransactionSerialize(tx, buf, sizeof(buf));
                         char txHex[bufLen*2 + 1];
                         
                         for (size_t j = 0; j < bufLen; j++) {
@@ -546,7 +546,7 @@ static int _BWPeerAcceptGetdataMessage(BWPeer *peer, const uint8_t *msg, size_t 
                         }
                         
                         peer_log(peer, "publishing tx: %s", txHex);
-                        BWPeerSendMessage(peer, buf, bufLen, MSG_TX);
+                        BRPeerSendMessage(peer, buf, bufLen, MSG_TX);
                         break;
                     }
                     
@@ -561,15 +561,15 @@ static int _BWPeerAcceptGetdataMessage(BWPeer *peer, const uint8_t *msg, size_t 
         }
 
         if (notfound) {
-            size_t bufLen = BWVarIntSize(array_count(notfound)) + 36*array_count(notfound), o = 0;
+            size_t bufLen = BRVarIntSize(array_count(notfound)) + 36*array_count(notfound), o = 0;
             uint8_t *buf = malloc(bufLen);
             
             assert(buf != NULL);
-            o += BWVarIntSet(&buf[o], (o <= bufLen ? bufLen - o : 0), array_count(notfound));
+            o += BRVarIntSet(&buf[o], (o <= bufLen ? bufLen - o : 0), array_count(notfound));
             memcpy(&buf[o], notfound, 36*array_count(notfound));
             o += 36*array_count(notfound);
             array_free(notfound);
-            BWPeerSendMessage(peer, buf, o, MSG_NOTFOUND);
+            BRPeerSendMessage(peer, buf, o, MSG_NOTFOUND);
             free(buf);
         }
     }
@@ -577,15 +577,15 @@ static int _BWPeerAcceptGetdataMessage(BWPeer *peer, const uint8_t *msg, size_t 
     return r;
 }
 
-static int _BWPeerAcceptNotfoundMessage(BWPeer *peer, const uint8_t *msg, size_t msgLen)
+static int _BRPeerAcceptNotfoundMessage(BRPeer *peer, const uint8_t *msg, size_t msgLen)
 {
-    BWPeerContext *ctx = (BWPeerContext *)peer;
-    size_t off = 0, count = (size_t)BWVarInt(msg, msgLen, &off);
+    BRPeerContext *ctx = (BRPeerContext *)peer;
+    size_t off = 0, count = (size_t)BRVarInt(msg, msgLen, &off);
     int r = 1;
 
     if (off == 0 || off + 36*count > msgLen) {
         peer_log(peer, "malformed notfound message, length is %zu, should be %zu for %zu item(s)", msgLen,
-                 BWVarIntSize(count) + 36*count, count);
+                 BRVarIntSize(count) + 36*count, count);
         r = 0;
     }
     else if (count > MAX_GETDATA_HASHES) {
@@ -624,7 +624,7 @@ static int _BWPeerAcceptNotfoundMessage(BWPeer *peer, const uint8_t *msg, size_t
     return r;
 }
 
-static int _BWPeerAcceptPingMessage(BWPeer *peer, const uint8_t *msg, size_t msgLen)
+static int _BRPeerAcceptPingMessage(BRPeer *peer, const uint8_t *msg, size_t msgLen)
 {
     int r = 1;
     
@@ -634,15 +634,15 @@ static int _BWPeerAcceptPingMessage(BWPeer *peer, const uint8_t *msg, size_t msg
     }
     else {
         peer_log(peer, "got ping");
-        BWPeerSendMessage(peer, msg, msgLen, MSG_PONG);
+        BRPeerSendMessage(peer, msg, msgLen, MSG_PONG);
     }
 
     return r;
 }
 
-static int _BWPeerAcceptPongMessage(BWPeer *peer, const uint8_t *msg, size_t msgLen)
+static int _BRPeerAcceptPongMessage(BRPeer *peer, const uint8_t *msg, size_t msgLen)
 {
-    BWPeerContext *ctx = (BWPeerContext *)peer;
+    BRPeerContext *ctx = (BRPeerContext *)peer;
     struct timeval tv;
     double pingTime;
     int r = 1;
@@ -684,41 +684,41 @@ static int _BWPeerAcceptPongMessage(BWPeer *peer, const uint8_t *msg, size_t msg
     return r;
 }
 
-static int _BWPeerAcceptMerkleblockMessage(BWPeer *peer, const uint8_t *msg, size_t msgLen)
+static int _BRPeerAcceptMerkleblockMessage(BRPeer *peer, const uint8_t *msg, size_t msgLen)
 {
     // Bitcoin nodes don't support querying arbitrary transactions, only transactions not yet accepted in a block. After
     // a merkleblock message, the remote node is expected to send tx messages for the tx referenced in the block. When a
     // non-tx message is received we should have all the tx in the merkleblock.
-    BWPeerContext *ctx = (BWPeerContext *)peer;
-    BWMerkleBlock *block = BWMerkleBlockParse(msg, msgLen);
+    BRPeerContext *ctx = (BRPeerContext *)peer;
+    BRMerkleBlock *block = BRMerkleBlockParse(msg, msgLen);
     int r = 1;
   
     if (! block) {
         peer_log(peer, "malformed merkleblock message with length: %zu", msgLen);
         r = 0;
     }
-    else if (! BWMerkleBlockIsValid(block, (uint32_t)time(NULL))) {
+    else if (! BRMerkleBlockIsValid(block, (uint32_t)time(NULL))) {
         peer_log(peer, "invalid merkleblock: %s", u256hex(block->blockHash));
-        BWMerkleBlockFree(block);
+        BRMerkleBlockFree(block);
         block = NULL;
         r = 0;
     }
     else if (! ctx->sentFilter && ! ctx->sentGetdata) {
         peer_log(peer, "got merkleblock message before loading a filter");
-        BWMerkleBlockFree(block);
+        BRMerkleBlockFree(block);
         block = NULL;
         r = 0;
     }
     else {
-        size_t count = BWMerkleBlockTxHashes(block, NULL, 0);
+        size_t count = BRMerkleBlockTxHashes(block, NULL, 0);
         UInt256 _hashes[(sizeof(UInt256)*count <= 0x1000) ? count : 0],
                 *hashes = (sizeof(UInt256)*count <= 0x1000) ? _hashes : malloc(count*sizeof(*hashes));
         
         assert(hashes != NULL);
-        count = BWMerkleBlockTxHashes(block, hashes, count);
+        count = BRMerkleBlockTxHashes(block, hashes, count);
 
         for (size_t i = count; i > 0; i--) { // reverse order for more efficient removal as tx arrive
-            if (BWSetContains(ctx->knownTxHashSet, &hashes[i - 1])) continue;
+            if (BRSetContains(ctx->knownTxHashSet, &hashes[i - 1])) continue;
             array_add(ctx->currentBlockTxHashes, hashes[i - 1]);
         }
 
@@ -732,17 +732,17 @@ static int _BWPeerAcceptMerkleblockMessage(BWPeer *peer, const uint8_t *msg, siz
         else if (ctx->relayedBlock) {
             ctx->relayedBlock(ctx->info, block);
         }
-        else BWMerkleBlockFree(block);
+        else BRMerkleBlockFree(block);
     }
 
     return r;
 }
 
 // described in BIP61: https://github.com/bitcoin/bips/blob/master/bip-0061.mediawiki
-static int _BWPeerAcceptRejectMessage(BWPeer *peer, const uint8_t *msg, size_t msgLen)
+static int _BRPeerAcceptRejectMessage(BRPeer *peer, const uint8_t *msg, size_t msgLen)
 {
-    BWPeerContext *ctx = (BWPeerContext *)peer;
-    size_t off = 0, strLen = (size_t)BWVarInt(msg, msgLen, &off);
+    BRPeerContext *ctx = (BRPeerContext *)peer;
+    size_t off = 0, strLen = (size_t)BRVarInt(msg, msgLen, &off);
     int r = 1;
     
     if (off + strLen + sizeof(uint8_t) > msgLen) {
@@ -759,7 +759,7 @@ static int _BWPeerAcceptRejectMessage(BWPeer *peer, const uint8_t *msg, size_t m
         type[sizeof(type) - 1] = '\0';
         off += strLen;
         code = msg[off++];
-        strLen = (size_t)BWVarInt(&msg[off], (off <= msgLen ? msgLen - off : 0), &len);
+        strLen = (size_t)BRVarInt(&msg[off], (off <= msgLen ? msgLen - off : 0), &len);
         off += len;
         if (strncmp(type, MSG_TX, sizeof(type)) == 0) hashLen = sizeof(UInt256);
         
@@ -789,9 +789,9 @@ static int _BWPeerAcceptRejectMessage(BWPeer *peer, const uint8_t *msg, size_t m
 }
 
 // BIP133: https://github.com/bitcoin/bips/blob/master/bip-0133.mediawiki
-static int _BWPeerAcceptFeeFilterMessage(BWPeer *peer, const uint8_t *msg, size_t msgLen)
+static int _BRPeerAcceptFeeFilterMessage(BRPeer *peer, const uint8_t *msg, size_t msgLen)
 {
-    BWPeerContext *ctx = (BWPeerContext *)peer;
+    BRPeerContext *ctx = (BRPeerContext *)peer;
     int r = 1;
     
     if (sizeof(uint64_t) > msgLen) {
@@ -807,9 +807,9 @@ static int _BWPeerAcceptFeeFilterMessage(BWPeer *peer, const uint8_t *msg, size_
     return r;
 }
 
-static int _BWPeerAcceptMessage(BWPeer *peer, const uint8_t *msg, size_t msgLen, const char *type)
+static int _BRPeerAcceptMessage(BRPeer *peer, const uint8_t *msg, size_t msgLen, const char *type)
 {
-    BWPeerContext *ctx = (BWPeerContext *)peer;
+    BRPeerContext *ctx = (BRPeerContext *)peer;
     int r = 1;
     
     if (ctx->currentBlock && strncmp(MSG_TX, type, 12) != 0) { // if we receive a non-tx message, merkleblock is done
@@ -819,28 +819,28 @@ static int _BWPeerAcceptMessage(BWPeer *peer, const uint8_t *msg, size_t msgLen,
         ctx->currentBlock = NULL;
         r = 0;
     }
-    else if (strncmp(MSG_VERSION, type, 12) == 0) r = _BWPeerAcceptVersionMessage(peer, msg, msgLen);
-    else if (strncmp(MSG_VERACK, type, 12) == 0) r = _BWPeerAcceptVerackMessage(peer, msg, msgLen);
-    else if (strncmp(MSG_ADDR, type, 12) == 0) r = _BWPeerAcceptAddrMessage(peer, msg, msgLen);
-    else if (strncmp(MSG_INV, type, 12) == 0) r = _BWPeerAcceptInvMessage(peer, msg, msgLen);
-    else if (strncmp(MSG_TX, type, 12) == 0) r = _BWPeerAcceptTxMessage(peer, msg, msgLen);
-    else if (strncmp(MSG_HEADERS, type, 12) == 0) r = _BWPeerAcceptHeadersMessage(peer, msg, msgLen);
-    else if (strncmp(MSG_GETADDR, type, 12) == 0) r = _BWPeerAcceptGetaddrMessage(peer, msg, msgLen);
-    else if (strncmp(MSG_GETDATA, type, 12) == 0) r = _BWPeerAcceptGetdataMessage(peer, msg, msgLen);
-    else if (strncmp(MSG_NOTFOUND, type, 12) == 0) r = _BWPeerAcceptNotfoundMessage(peer, msg, msgLen);
-    else if (strncmp(MSG_PING, type, 12) == 0) r = _BWPeerAcceptPingMessage(peer, msg, msgLen);
-    else if (strncmp(MSG_PONG, type, 12) == 0) r = _BWPeerAcceptPongMessage(peer, msg, msgLen);
-    else if (strncmp(MSG_MERKLEBLOCK, type, 12) == 0) r = _BWPeerAcceptMerkleblockMessage(peer, msg, msgLen);
-    else if (strncmp(MSG_REJECT, type, 12) == 0) r = _BWPeerAcceptRejectMessage(peer, msg, msgLen);
-    else if (strncmp(MSG_FEEFILTER, type, 12) == 0) r = _BWPeerAcceptFeeFilterMessage(peer, msg, msgLen);
+    else if (strncmp(MSG_VERSION, type, 12) == 0) r = _BRPeerAcceptVersionMessage(peer, msg, msgLen);
+    else if (strncmp(MSG_VERACK, type, 12) == 0) r = _BRPeerAcceptVerackMessage(peer, msg, msgLen);
+    else if (strncmp(MSG_ADDR, type, 12) == 0) r = _BRPeerAcceptAddrMessage(peer, msg, msgLen);
+    else if (strncmp(MSG_INV, type, 12) == 0) r = _BRPeerAcceptInvMessage(peer, msg, msgLen);
+    else if (strncmp(MSG_TX, type, 12) == 0) r = _BRPeerAcceptTxMessage(peer, msg, msgLen);
+    else if (strncmp(MSG_HEADERS, type, 12) == 0) r = _BRPeerAcceptHeadersMessage(peer, msg, msgLen);
+    else if (strncmp(MSG_GETADDR, type, 12) == 0) r = _BRPeerAcceptGetaddrMessage(peer, msg, msgLen);
+    else if (strncmp(MSG_GETDATA, type, 12) == 0) r = _BRPeerAcceptGetdataMessage(peer, msg, msgLen);
+    else if (strncmp(MSG_NOTFOUND, type, 12) == 0) r = _BRPeerAcceptNotfoundMessage(peer, msg, msgLen);
+    else if (strncmp(MSG_PING, type, 12) == 0) r = _BRPeerAcceptPingMessage(peer, msg, msgLen);
+    else if (strncmp(MSG_PONG, type, 12) == 0) r = _BRPeerAcceptPongMessage(peer, msg, msgLen);
+    else if (strncmp(MSG_MERKLEBLOCK, type, 12) == 0) r = _BRPeerAcceptMerkleblockMessage(peer, msg, msgLen);
+    else if (strncmp(MSG_REJECT, type, 12) == 0) r = _BRPeerAcceptRejectMessage(peer, msg, msgLen);
+    else if (strncmp(MSG_FEEFILTER, type, 12) == 0) r = _BRPeerAcceptFeeFilterMessage(peer, msg, msgLen);
     else peer_log(peer, "dropping %s, length %zu, not implemented", type, msgLen);
 
     return r;
 }
 
-static int _BWPeerOpenSocket(BWPeer *peer, int domain, double timeout, int *error)
+static int _BRPeerOpenSocket(BRPeer *peer, int domain, double timeout, int *error)
 {
-    BWPeerContext *ctx = (BWPeerContext *)peer;
+    BRPeerContext *ctx = (BRPeerContext *)peer;
     struct sockaddr_storage addr;
     struct timeval tv;
     fd_set fds;
@@ -900,8 +900,8 @@ static int _BWPeerOpenSocket(BWPeer *peer, int domain, double timeout, int *erro
                 r = 0;
             }
         }
-        else if (err && domain == PF_INET6 && _BWPeerIsIPv4(peer)) {
-            return _BWPeerOpenSocket(peer, PF_INET, timeout, error); // fallback to IPv4
+        else if (err && domain == PF_INET6 && _BRPeerIsIPv4(peer)) {
+            return _BRPeerOpenSocket(peer, PF_INET, timeout, error); // fallback to IPv4
         }
         else if (err) r = 0;
 
@@ -916,13 +916,13 @@ static int _BWPeerOpenSocket(BWPeer *peer, int domain, double timeout, int *erro
 
 static void *_peerThreadRoutine(void *arg)
 {
-    BWPeer *peer = arg;
-    BWPeerContext *ctx = arg;
+    BRPeer *peer = arg;
+    BRPeerContext *ctx = arg;
     int socket, error = 0;
 
     pthread_cleanup_push(ctx->threadCleanup, ctx->info);
     
-    if (_BWPeerOpenSocket(peer, PF_INET6, CONNECT_TIMEOUT, &error)) {
+    if (_BRPeerOpenSocket(peer, PF_INET6, CONNECT_TIMEOUT, &error)) {
         struct timeval tv;
         double time = 0, msgTimeout;
         uint8_t header[HEADER_LENGTH], *payload = malloc(0x1000);
@@ -932,7 +932,7 @@ static void *_peerThreadRoutine(void *arg)
         assert(payload != NULL);
         gettimeofday(&tv, NULL);
         ctx->startTime = tv.tv_sec + (double)tv.tv_usec/1000000;
-        BWPeerSendVersionMessage(peer);
+        BRPeerSendVersionMessage(peer);
         
         while (ctx->socket >= 0 && ! error) {
             len = 0;
@@ -949,7 +949,7 @@ static void *_peerThreadRoutine(void *arg)
 
                 if (! error && time >= ctx->mempoolTime) {
                     peer_log(peer, "done waiting for mempool response");
-                    BWPeerSendPing(peer, ctx->mempoolInfo, ctx->mempoolCallback);
+                    BRPeerSendPing(peer, ctx->mempoolInfo, ctx->mempoolCallback);
                     ctx->mempoolCallback = NULL;
                     ctx->mempoolTime = DBL_MAX;
                 }
@@ -1001,14 +1001,14 @@ static void *_peerThreadRoutine(void *arg)
                         peer_log(peer, "%s", strerror(error));
                     }
                     else if (len == msgLen) {
-                        BWSHA256_2(&hash, payload, msgLen);
+                        BRSHA256_2(&hash, payload, msgLen);
                         
                         if (UInt32GetLE(&hash) != checksum) { // verify checksum
                             peer_log(peer, "error reading %s, invalid checksum %x, expected %x, payload length:%"PRIu32
                                      ", SHA256_2:%s", type, UInt32GetLE(&hash), checksum, msgLen, u256hex(hash));
                             error = EPROTO;
                         }
-                        else if (! _BWPeerAcceptMessage(peer, payload, msgLen, type)) error = EPROTO;
+                        else if (! _BRPeerAcceptMessage(peer, payload, msgLen, type)) error = EPROTO;
                     }
                 }
             }
@@ -1019,7 +1019,7 @@ static void *_peerThreadRoutine(void *arg)
     
     socket = ctx->socket;
     ctx->socket = -1;
-    ctx->status = BWPeerStatusDisconnected;
+    ctx->status = BRPeerStatusDisconnected;
     if (socket >= 0) close(socket);
     peer_log(peer, "disconnected");
     
@@ -1043,10 +1043,10 @@ static void _dummyThreadCleanup(void *info)
 {
 }
 
-// returns a newly allocated BWPeer struct that must be freed by calling BWPeerFree()
-BWPeer *BWPeerNew(uint32_t magicNumber)
+// returns a newly allocated BRPeer struct that must be freed by calling BRPeerFree()
+BRPeer *BRPeerNew(uint32_t magicNumber)
 {
-    BWPeerContext *ctx = calloc(1, sizeof(*ctx));
+    BRPeerContext *ctx = calloc(1, sizeof(*ctx));
     
     assert(ctx != NULL);
     ctx->magicNumber = magicNumber;
@@ -1054,7 +1054,7 @@ BWPeer *BWPeerNew(uint32_t magicNumber)
     array_new(ctx->knownBlockHashes, 10);
     array_new(ctx->currentBlockTxHashes, 10);
     array_new(ctx->knownTxHashes, 10);
-    ctx->knownTxHashSet = BWSetNew(BWTransactionHash, BWTransactionEq, 10);
+    ctx->knownTxHashSet = BRSetNew(BRTransactionHash, BRTransactionEq, 10);
     array_new(ctx->pongInfo, 10);
     array_new(ctx->pongCallback, 10);
     ctx->pingTime = DBL_MAX;
@@ -1068,31 +1068,31 @@ BWPeer *BWPeerNew(uint32_t magicNumber)
 // info is a void pointer that will be passed along with each callback call
 // void connected(void *) - called when peer handshake completes successfully
 // void disconnected(void *, int) - called when peer connection is closed, error is an errno.h code
-// void relayedPeers(void *, const BWPeer[], size_t) - called when an "addr" message is received from peer
-// void relayedTx(void *, BWTransaction *) - called when a "tx" message is received from peer
+// void relayedPeers(void *, const BRPeer[], size_t) - called when an "addr" message is received from peer
+// void relayedTx(void *, BRTransaction *) - called when a "tx" message is received from peer
 // void hasTx(void *, UInt256 txHash) - called when an "inv" message with an already-known tx hash is received from peer
 // void rejectedTx(void *, UInt256 txHash, uint8_t) - called when a "reject" message is received from peer
-// void relayedBlock(void *, BWMerkleBlock *) - called when a "merkleblock" or "headers" message is received from peer
+// void relayedBlock(void *, BRMerkleBlock *) - called when a "merkleblock" or "headers" message is received from peer
 // void notfound(void *, const UInt256[], size_t, const UInt256[], size_t) - called when "notfound" message is received
-// BWTransaction *requestedTx(void *, UInt256) - called when "getdata" message with a tx hash is received from peer
+// BRTransaction *requestedTx(void *, UInt256) - called when "getdata" message with a tx hash is received from peer
 // int networkIsReachable(void *) - must return true when networking is available, false otherwise
 // void threadCleanup(void *) - called before a thread terminates to faciliate any needed cleanup
-void BWPeerSetCallbacks(BWPeer *peer, void *info,
+void BRPeerSetCallbacks(BRPeer *peer, void *info,
                         void (*connected)(void *info),
                         void (*disconnected)(void *info, int error),
-                        void (*relayedPeers)(void *info, const BWPeer peers[], size_t peersCount),
-                        void (*relayedTx)(void *info, BWTransaction *tx),
+                        void (*relayedPeers)(void *info, const BRPeer peers[], size_t peersCount),
+                        void (*relayedTx)(void *info, BRTransaction *tx),
                         void (*hasTx)(void *info, UInt256 txHash),
                         void (*rejectedTx)(void *info, UInt256 txHash, uint8_t code),
-                        void (*relayedBlock)(void *info, BWMerkleBlock *block),
+                        void (*relayedBlock)(void *info, BRMerkleBlock *block),
                         void (*notfound)(void *info, const UInt256 txHashes[], size_t txCount,
                                          const UInt256 blockHashes[], size_t blockCount),
                         void (*setFeePerKb)(void *info, uint64_t feePerKb),
-                        BWTransaction *(*requestedTx)(void *info, UInt256 txHash),
+                        BRTransaction *(*requestedTx)(void *info, UInt256 txHash),
                         int (*networkIsReachable)(void *info),
                         void (*threadCleanup)(void *info))
 {
-    BWPeerContext *ctx = (BWPeerContext *)peer;
+    BRPeerContext *ctx = (BRPeerContext *)peer;
     
     ctx->info = info;
     ctx->connected = connected;
@@ -1110,33 +1110,33 @@ void BWPeerSetCallbacks(BWPeer *peer, void *info,
 }
 
 // set earliestKeyTime to wallet creation time in order to speed up initial sync
-void BWPeerSetEarliestKeyTime(BWPeer *peer, uint32_t earliestKeyTime)
+void BRPeerSetEarliestKeyTime(BRPeer *peer, uint32_t earliestKeyTime)
 {
-    ((BWPeerContext *)peer)->earliestKeyTime = earliestKeyTime;
+    ((BRPeerContext *)peer)->earliestKeyTime = earliestKeyTime;
 }
 
 // call this when local block height changes (helps detect tarpit nodes)
-void BWPeerSetCurrentBlockHeight(BWPeer *peer, uint32_t currentBlockHeight)
+void BRPeerSetCurrentBlockHeight(BRPeer *peer, uint32_t currentBlockHeight)
 {
-    ((BWPeerContext *)peer)->currentBlockHeight = currentBlockHeight;
+    ((BRPeerContext *)peer)->currentBlockHeight = currentBlockHeight;
 }
 
 // current connection status
-BWPeerStatus BWPeerConnectStatus(BWPeer *peer)
+BRPeerStatus BRPeerConnectStatus(BRPeer *peer)
 {
-    return ((BWPeerContext *)peer)->status;
+    return ((BRPeerContext *)peer)->status;
 }
 
 // open connection to peer and perform handshake
-void BWPeerConnect(BWPeer *peer)
+void BRPeerConnect(BRPeer *peer)
 {
-    BWPeerContext *ctx = (BWPeerContext *)peer;
+    BRPeerContext *ctx = (BRPeerContext *)peer;
     struct timeval tv;
     int error = 0;
     pthread_attr_t attr;
 
-    if (ctx->status == BWPeerStatusDisconnected || ctx->waitingForNetwork) {
-        ctx->status = BWPeerStatusConnecting;
+    if (ctx->status == BRPeerStatusDisconnected || ctx->waitingForNetwork) {
+        ctx->status = BRPeerStatusConnecting;
     
         if (ctx->networkIsReachable && ! ctx->networkIsReachable(ctx->info)) { // delay until network is reachable
             if (! ctx->waitingForNetwork) peer_log(peer, "waiting for network reachability");
@@ -1151,7 +1151,7 @@ void BWPeerConnect(BWPeer *peer)
             if (pthread_attr_init(&attr) != 0) {
                 error = ENOMEM;
                 peer_log(peer, "error creating thread");
-                ctx->status = BWPeerStatusDisconnected;
+                ctx->status = BRPeerStatusDisconnected;
                 //if (ctx->disconnected) ctx->disconnected(ctx->info, error);
             }
             else if (pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED) != 0 ||
@@ -1159,7 +1159,7 @@ void BWPeerConnect(BWPeer *peer)
                 error = EAGAIN;
                 peer_log(peer, "error creating thread");
                 pthread_attr_destroy(&attr);
-                ctx->status = BWPeerStatusDisconnected;
+                ctx->status = BRPeerStatusDisconnected;
                 //if (ctx->disconnected) ctx->disconnected(ctx->info, error);
             }
         }
@@ -1167,9 +1167,9 @@ void BWPeerConnect(BWPeer *peer)
 }
 
 // close connection to peer
-void BWPeerDisconnect(BWPeer *peer)
+void BRPeerDisconnect(BRPeer *peer)
 {
-    BWPeerContext *ctx = (BWPeerContext *)peer;
+    BRPeerContext *ctx = (BRPeerContext *)peer;
     int socket = ctx->socket;
 
     if (socket >= 0) {
@@ -1180,9 +1180,9 @@ void BWPeerDisconnect(BWPeer *peer)
 }
 
 // call this to (re)schedule a disconnect in the given number of seconds, or < 0 to cancel (useful for sync timeout)
-void BWPeerScheduleDisconnect(BWPeer *peer, double seconds)
+void BRPeerScheduleDisconnect(BRPeer *peer, double seconds)
 {
-    BWPeerContext *ctx = ((BWPeerContext *)peer);
+    BRPeerContext *ctx = ((BRPeerContext *)peer);
     struct timeval tv;
     
     gettimeofday(&tv, NULL);
@@ -1190,18 +1190,18 @@ void BWPeerScheduleDisconnect(BWPeer *peer, double seconds)
 }
 
 // call this when wallet addresses need to be added to bloom filter
-void BWPeerSetNeedsFilterUpdate(BWPeer *peer, int needsFilterUpdate)
+void BRPeerSetNeedsFilterUpdate(BRPeer *peer, int needsFilterUpdate)
 {
-    ((BWPeerContext *)peer)->needsFilterUpdate = needsFilterUpdate;
+    ((BRPeerContext *)peer)->needsFilterUpdate = needsFilterUpdate;
 }
 
 // display name of peer address
-const char *BWPeerHost(BWPeer *peer)
+const char *BRPeerHost(BRPeer *peer)
 {
-    BWPeerContext *ctx = (BWPeerContext *)peer;
+    BRPeerContext *ctx = (BRPeerContext *)peer;
 
     if (ctx->host[0] == '\0') {
-        if (_BWPeerIsIPv4(peer)) {
+        if (_BRPeerIsIPv4(peer)) {
             inet_ntop(AF_INET, &peer->address.u32[3], ctx->host, sizeof(ctx->host));
         }
         else inet_ntop(AF_INET6, &peer->address, ctx->host, sizeof(ctx->host));
@@ -1211,33 +1211,33 @@ const char *BWPeerHost(BWPeer *peer)
 }
 
 // connected peer version number
-uint32_t BWPeerVersion(BWPeer *peer)
+uint32_t BRPeerVersion(BRPeer *peer)
 {
-    return ((BWPeerContext *)peer)->version;
+    return ((BRPeerContext *)peer)->version;
 }
 
 // connected peer user agent string
-const char *BWPeerUserAgent(BWPeer *peer)
+const char *BRPeerUserAgent(BRPeer *peer)
 {
-    return ((BWPeerContext *)peer)->useragent;
+    return ((BRPeerContext *)peer)->useragent;
 }
 
 // best block height reported by connected peer
-uint32_t BWPeerLastBlock(BWPeer *peer)
+uint32_t BRPeerLastBlock(BRPeer *peer)
 {
-    return ((BWPeerContext *)peer)->lastblock;
+    return ((BRPeerContext *)peer)->lastblock;
 }
 
 // average ping time for connected peer
-double BWPeerPingTime(BWPeer *peer)
+double BRPeerPingTime(BRPeer *peer)
 {
-    return ((BWPeerContext *)peer)->pingTime;
+    return ((BRPeerContext *)peer)->pingTime;
 }
 
 // minimum tx fee rate peer will accept
-uint64_t BWPeerFeePerKb(BWPeer *peer)
+uint64_t BRPeerFeePerKb(BRPeer *peer)
 {
-    return ((BWPeerContext *)peer)->feePerKb;
+    return ((BRPeerContext *)peer)->feePerKb;
 }
 
 #ifndef MSG_NOSIGNAL   // linux based systems have a MSG_NOSIGNAL send flag, useful for supressing SIGPIPE signals
@@ -1245,13 +1245,13 @@ uint64_t BWPeerFeePerKb(BWPeer *peer)
 #endif
 
 // sends a bitcoin protocol message to peer
-void BWPeerSendMessage(BWPeer *peer, const uint8_t *msg, size_t msgLen, const char *type)
+void BRPeerSendMessage(BRPeer *peer, const uint8_t *msg, size_t msgLen, const char *type)
 {
     if (msgLen > MAX_MSG_LENGTH) {
         peer_log(peer, "failed to send %s, length %zu is too long", type, msgLen);
     }
     else {
-        BWPeerContext *ctx = (BWPeerContext *)peer;
+        BRPeerContext *ctx = (BRPeerContext *)peer;
         uint8_t buf[HEADER_LENGTH + msgLen], hash[32];
         size_t off = 0;
         ssize_t n = 0;
@@ -1264,7 +1264,7 @@ void BWPeerSendMessage(BWPeer *peer, const uint8_t *msg, size_t msgLen, const ch
         off += 12;
         UInt32SetLE(&buf[off], (uint32_t)msgLen);
         off += sizeof(uint32_t);
-        BWSHA256_2(hash, msg, msgLen);
+        BRSHA256_2(hash, msg, msgLen);
         memcpy(&buf[off], hash, sizeof(uint32_t));
         off += sizeof(uint32_t);
         memcpy(&buf[off], msg, msgLen);
@@ -1284,16 +1284,16 @@ void BWPeerSendMessage(BWPeer *peer, const uint8_t *msg, size_t msgLen, const ch
         
         if (error) {
             peer_log(peer, "%s", strerror(error));
-            BWPeerDisconnect(peer);
+            BRPeerDisconnect(peer);
         }
     }
 }
 
-void BWPeerSendVersionMessage(BWPeer *peer)
+void BRPeerSendVersionMessage(BRPeer *peer)
 {
-    BWPeerContext *ctx = (BWPeerContext *)peer;
+    BRPeerContext *ctx = (BRPeerContext *)peer;
     size_t off = 0, userAgentLen = strlen(USER_AGENT);
-    uint8_t msg[80 + BWVarIntSize(userAgentLen) + userAgentLen + 5];
+    uint8_t msg[80 + BRVarIntSize(userAgentLen) + userAgentLen + 5];
     
     UInt32SetLE(&msg[off], PROTOCOL_VERSION); // version
     off += sizeof(uint32_t);
@@ -1313,51 +1313,51 @@ void BWPeerSendVersionMessage(BWPeer *peer)
     off += sizeof(UInt128);
     UInt16SetBE(&msg[off], peer->port);
     off += sizeof(uint16_t);
-    ctx->nonce = ((uint64_t)BWRand(0) << 32) | (uint64_t)BWRand(0); // random nonce
+    ctx->nonce = ((uint64_t)BRRand(0) << 32) | (uint64_t)BRRand(0); // random nonce
     UInt64SetLE(&msg[off], ctx->nonce);
     off += sizeof(uint64_t);
-    off += BWVarIntSet(&msg[off], (off <= sizeof(msg) ? sizeof(msg) - off : 0), userAgentLen);
+    off += BRVarIntSet(&msg[off], (off <= sizeof(msg) ? sizeof(msg) - off : 0), userAgentLen);
     strncpy((char *)&msg[off], USER_AGENT, userAgentLen); // user agent string
     off += userAgentLen;
     UInt32SetLE(&msg[off], 0); // last block received
     off += sizeof(uint32_t);
     msg[off++] = 0; // relay transactions (0 for SPV bloom filter mode)
-    BWPeerSendMessage(peer, msg, sizeof(msg), MSG_VERSION);
+    BRPeerSendMessage(peer, msg, sizeof(msg), MSG_VERSION);
 }
 
-void BWPeerSendVerackMessage(BWPeer *peer)
+void BRPeerSendVerackMessage(BRPeer *peer)
 {
-    BWPeerSendMessage(peer, NULL, 0, MSG_VERACK);
-    ((BWPeerContext *)peer)->sentVerack = 1;
+    BRPeerSendMessage(peer, NULL, 0, MSG_VERACK);
+    ((BRPeerContext *)peer)->sentVerack = 1;
 }
 
-void BWPeerSendAddr(BWPeer *peer)
+void BRPeerSendAddr(BRPeer *peer)
 {
-    uint8_t msg[BWVarIntSize(0)];
-    size_t msgLen = BWVarIntSet(msg, sizeof(msg), 0);
+    uint8_t msg[BRVarIntSize(0)];
+    size_t msgLen = BRVarIntSet(msg, sizeof(msg), 0);
     
     //TODO: send peer addresses we know about
-    BWPeerSendMessage(peer, msg, msgLen, MSG_ADDR);
+    BRPeerSendMessage(peer, msg, msgLen, MSG_ADDR);
 }
 
-void BWPeerSendFilterload(BWPeer *peer, const uint8_t *filter, size_t filterLen)
+void BRPeerSendFilterload(BRPeer *peer, const uint8_t *filter, size_t filterLen)
 {
-    ((BWPeerContext *)peer)->sentFilter = 1;
-    ((BWPeerContext *)peer)->sentMempool = 0;
-    BWPeerSendMessage(peer, filter, filterLen, MSG_FILTERLOAD);
+    ((BRPeerContext *)peer)->sentFilter = 1;
+    ((BRPeerContext *)peer)->sentMempool = 0;
+    BRPeerSendMessage(peer, filter, filterLen, MSG_FILTERLOAD);
 }
 
-void BWPeerSendMempool(BWPeer *peer, const UInt256 knownTxHashes[], size_t knownTxCount, void *info,
+void BRPeerSendMempool(BRPeer *peer, const UInt256 knownTxHashes[], size_t knownTxCount, void *info,
                        void (*completionCallback)(void *info, int success))
 {
-    BWPeerContext *ctx = (BWPeerContext *)peer;
+    BRPeerContext *ctx = (BRPeerContext *)peer;
     struct timeval tv;
     int sentMempool = ctx->sentMempool;
     
     ctx->sentMempool = 1;
     
     if (! sentMempool && ! ctx->mempoolCallback) {
-        _BWPeerAddKnownTxHashes(peer, knownTxHashes, knownTxCount);
+        _BRPeerAddKnownTxHashes(peer, knownTxHashes, knownTxCount);
         
         if (completionCallback) {
             gettimeofday(&tv, NULL);
@@ -1366,7 +1366,7 @@ void BWPeerSendMempool(BWPeer *peer, const UInt256 knownTxHashes[], size_t known
             ctx->mempoolCallback = completionCallback;
         }
         
-        BWPeerSendMessage(peer, NULL, 0, MSG_MEMPOOL);
+        BRPeerSendMessage(peer, NULL, 0, MSG_MEMPOOL);
     }
     else {
         peer_log(peer, "mempool request already sent");
@@ -1374,15 +1374,15 @@ void BWPeerSendMempool(BWPeer *peer, const UInt256 knownTxHashes[], size_t known
     }
 }
 
-void BWPeerSendGetheaders(BWPeer *peer, const UInt256 locators[], size_t locatorsCount, UInt256 hashStop)
+void BRPeerSendGetheaders(BRPeer *peer, const UInt256 locators[], size_t locatorsCount, UInt256 hashStop)
 {
     size_t i, off = 0;
-    size_t msgLen = sizeof(uint32_t) + BWVarIntSize(locatorsCount) + sizeof(*locators)*locatorsCount + sizeof(hashStop);
+    size_t msgLen = sizeof(uint32_t) + BRVarIntSize(locatorsCount) + sizeof(*locators)*locatorsCount + sizeof(hashStop);
     uint8_t msg[msgLen];
     
     UInt32SetLE(&msg[off], PROTOCOL_VERSION);
     off += sizeof(uint32_t);
-    off += BWVarIntSet(&msg[off], (off <= msgLen ? msgLen - off : 0), locatorsCount);
+    off += BRVarIntSet(&msg[off], (off <= msgLen ? msgLen - off : 0), locatorsCount);
 
     for (i = 0; i < locatorsCount; i++) {
         UInt256Set(&msg[off], locators[i]);
@@ -1395,19 +1395,19 @@ void BWPeerSendGetheaders(BWPeer *peer, const UInt256 locators[], size_t locator
     if (locatorsCount > 0) {
         peer_log(peer, "calling getheaders with %zu locators: [%s,%s %s]", locatorsCount, u256hex(locators[0]),
                  (locatorsCount > 2 ? " ...," : ""), (locatorsCount > 1 ? u256hex(locators[locatorsCount - 1]) : ""));
-        BWPeerSendMessage(peer, msg, off, MSG_GETHEADERS);
+        BRPeerSendMessage(peer, msg, off, MSG_GETHEADERS);
     }
 }
 
-void BWPeerSendGetblocks(BWPeer *peer, const UInt256 locators[], size_t locatorsCount, UInt256 hashStop)
+void BRPeerSendGetblocks(BRPeer *peer, const UInt256 locators[], size_t locatorsCount, UInt256 hashStop)
 {
     size_t i, off = 0;
-    size_t msgLen = sizeof(uint32_t) + BWVarIntSize(locatorsCount) + sizeof(*locators)*locatorsCount + sizeof(hashStop);
+    size_t msgLen = sizeof(uint32_t) + BRVarIntSize(locatorsCount) + sizeof(*locators)*locatorsCount + sizeof(hashStop);
     uint8_t msg[msgLen];
     
     UInt32SetLE(&msg[off], PROTOCOL_VERSION);
     off += sizeof(uint32_t);
-    off += BWVarIntSet(&msg[off], (off <= msgLen ? msgLen - off : 0), locatorsCount);
+    off += BRVarIntSet(&msg[off], (off <= msgLen ? msgLen - off : 0), locatorsCount);
     
     for (i = 0; i < locatorsCount; i++) {
         UInt256Set(&msg[off], locators[i]);
@@ -1420,23 +1420,23 @@ void BWPeerSendGetblocks(BWPeer *peer, const UInt256 locators[], size_t locators
     if (locatorsCount > 0) {
         peer_log(peer, "calling getblocks with %zu locators: [%s,%s %s]", locatorsCount, u256hex(locators[0]),
                  (locatorsCount > 2 ? " ...," : ""), (locatorsCount > 1 ? u256hex(locators[locatorsCount - 1]) : ""));
-        BWPeerSendMessage(peer, msg, off, MSG_GETBLOCKS);
+        BRPeerSendMessage(peer, msg, off, MSG_GETBLOCKS);
     }
 }
 
-void BWPeerSendInv(BWPeer *peer, const UInt256 txHashes[], size_t txCount)
+void BRPeerSendInv(BRPeer *peer, const UInt256 txHashes[], size_t txCount)
 {
-    BWPeerContext *ctx = (BWPeerContext *)peer;
+    BRPeerContext *ctx = (BRPeerContext *)peer;
     size_t knownCount = array_count(ctx->knownTxHashes);
 
-    _BWPeerAddKnownTxHashes(peer, txHashes, txCount);
+    _BRPeerAddKnownTxHashes(peer, txHashes, txCount);
     txCount = array_count(ctx->knownTxHashes) - knownCount;
 
     if (txCount > 0) {
-        size_t i, off = 0, msgLen = BWVarIntSize(txCount) + (sizeof(uint32_t) + sizeof(*txHashes))*txCount;
+        size_t i, off = 0, msgLen = BRVarIntSize(txCount) + (sizeof(uint32_t) + sizeof(*txHashes))*txCount;
         uint8_t msg[msgLen];
         
-        off += BWVarIntSet(&msg[off], (off <= msgLen ? msgLen - off : 0), txCount);
+        off += BRVarIntSet(&msg[off], (off <= msgLen ? msgLen - off : 0), txCount);
         
         for (i = 0; i < txCount; i++) {
             UInt32SetLE(&msg[off], inv_tx);
@@ -1445,11 +1445,11 @@ void BWPeerSendInv(BWPeer *peer, const UInt256 txHashes[], size_t txCount)
             off += sizeof(UInt256);
         }
 
-        BWPeerSendMessage(peer, msg, off, MSG_INV);
+        BRPeerSendMessage(peer, msg, off, MSG_INV);
     }
 }
 
-void BWPeerSendGetdata(BWPeer *peer, const UInt256 txHashes[], size_t txCount, const UInt256 blockHashes[],
+void BRPeerSendGetdata(BRPeer *peer, const UInt256 txHashes[], size_t txCount, const UInt256 blockHashes[],
                        size_t blockCount)
 {
     size_t i, off = 0, count = txCount + blockCount;
@@ -1458,10 +1458,10 @@ void BWPeerSendGetdata(BWPeer *peer, const UInt256 txHashes[], size_t txCount, c
         peer_log(peer, "couldn't send getdata, %zu is too many items, max is %d", count, MAX_GETDATA_HASHES);
     }
     else if (count > 0) {
-        size_t msgLen = BWVarIntSize(count) + (sizeof(uint32_t) + sizeof(UInt256))*(count);
+        size_t msgLen = BRVarIntSize(count) + (sizeof(uint32_t) + sizeof(UInt256))*(count);
         uint8_t msg[msgLen];
 
-        off += BWVarIntSet(&msg[off], (off <= msgLen ? msgLen - off : 0), count);
+        off += BRVarIntSet(&msg[off], (off <= msgLen ? msgLen - off : 0), count);
         
         for (i = 0; i < txCount; i++) {
             UInt32SetLE(&msg[off], inv_tx);
@@ -1477,20 +1477,20 @@ void BWPeerSendGetdata(BWPeer *peer, const UInt256 txHashes[], size_t txCount, c
             off += sizeof(UInt256);
         }
         
-        ((BWPeerContext *)peer)->sentGetdata = 1;
-        BWPeerSendMessage(peer, msg, off, MSG_GETDATA);
+        ((BRPeerContext *)peer)->sentGetdata = 1;
+        BRPeerSendMessage(peer, msg, off, MSG_GETDATA);
     }
 }
 
-void BWPeerSendGetaddr(BWPeer *peer)
+void BRPeerSendGetaddr(BRPeer *peer)
 {
-    ((BWPeerContext *)peer)->sentGetaddr = 1;
-    BWPeerSendMessage(peer, NULL, 0, MSG_GETADDR);
+    ((BRPeerContext *)peer)->sentGetaddr = 1;
+    BRPeerSendMessage(peer, NULL, 0, MSG_GETADDR);
 }
 
-void BWPeerSendPing(BWPeer *peer, void *info, void (*pongCallback)(void *info, int success))
+void BRPeerSendPing(BRPeer *peer, void *info, void (*pongCallback)(void *info, int success))
 {
-    BWPeerContext *ctx = (BWPeerContext *)peer;
+    BRPeerContext *ctx = (BRPeerContext *)peer;
     uint8_t msg[sizeof(uint64_t)];
     struct timeval tv;
     
@@ -1499,13 +1499,13 @@ void BWPeerSendPing(BWPeer *peer, void *info, void (*pongCallback)(void *info, i
     array_add(ctx->pongInfo, info);
     array_add(ctx->pongCallback, pongCallback);
     UInt64SetLE(msg, ctx->nonce);
-    BWPeerSendMessage(peer, msg, sizeof(msg), MSG_PING);
+    BRPeerSendMessage(peer, msg, sizeof(msg), MSG_PING);
 }
 
 // useful to get additional tx after a bloom filter update
-void BWPeerRerequestBlocks(BWPeer *peer, UInt256 fromBlock)
+void BRPeerRerequestBlocks(BRPeer *peer, UInt256 fromBlock)
 {
-    BWPeerContext *ctx = (BWPeerContext *)peer;
+    BRPeerContext *ctx = (BRPeerContext *)peer;
     size_t i = array_count(ctx->knownBlockHashes);
     
     while (i > 0 && ! UInt256Eq(ctx->knownBlockHashes[i - 1], fromBlock)) i--;
@@ -1513,25 +1513,25 @@ void BWPeerRerequestBlocks(BWPeer *peer, UInt256 fromBlock)
     if (i > 0) {
         array_rm_range(ctx->knownBlockHashes, 0, i - 1);
         peer_log(peer, "re-requesting %zu block(s)", array_count(ctx->knownBlockHashes));
-        BWPeerSendGetdata(peer, NULL, 0, ctx->knownBlockHashes, array_count(ctx->knownBlockHashes));
+        BRPeerSendGetdata(peer, NULL, 0, ctx->knownBlockHashes, array_count(ctx->knownBlockHashes));
     }
 }
 
-void BWPeerFree(BWPeer *peer)
+void BRPeerFree(BRPeer *peer)
 {
-    BWPeerContext *ctx = (BWPeerContext *)peer;
+    BRPeerContext *ctx = (BRPeerContext *)peer;
     
     if (ctx->useragent) array_free(ctx->useragent);
     if (ctx->currentBlockTxHashes) array_free(ctx->currentBlockTxHashes);
     if (ctx->knownBlockHashes) array_free(ctx->knownBlockHashes);
     if (ctx->knownTxHashes) array_free(ctx->knownTxHashes);
-    if (ctx->knownTxHashSet) BWSetFree(ctx->knownTxHashSet);
+    if (ctx->knownTxHashSet) BRSetFree(ctx->knownTxHashSet);
     if (ctx->pongInfo) array_free(ctx->pongInfo);
     if (ctx->pongCallback) array_free(ctx->pongCallback);
     free(ctx);
 }
 
-void BWPeerAcceptMessageTest(BWPeer *peer, const uint8_t *msg, size_t msgLen, const char *type)
+void BRPeerAcceptMessageTest(BRPeer *peer, const uint8_t *msg, size_t msgLen, const char *type)
 {
-    _BWPeerAcceptMessage(peer, msg, msgLen, type);
+    _BRPeerAcceptMessage(peer, msg, msgLen, type);
 }

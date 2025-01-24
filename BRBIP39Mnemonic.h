@@ -1,5 +1,5 @@
 //
-//  BWBIP39Mnemonic.h
+//  BRBIP39Mnemonic.h
 //
 //  Created by Aaron Voisine on 9/7/15.
 //  Copyright (c) 2015 breadwallet LLC
@@ -22,8 +22,8 @@
 //  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 //  THE SOFTWARE.
 
-#ifndef BWBIP39Mnemonic_h
-#define BWBIP39Mnemonic_h
+#ifndef BRBIP39Mnemonic_h
+#define BRBIP39Mnemonic_h
 
 #include <stddef.h>
 #include <inttypes.h>
@@ -45,21 +45,21 @@ extern "C" {
 #define BIP39_WORDLIST_COUNT 2048       // number of words in a BIP39 wordlist
 
 // returns number of bytes written to phrase including NULL terminator, or phraseLen needed if phrase is NULL
-size_t BWBIP39Encode(char *phrase, size_t phraseLen, const char *wordList[], const uint8_t *data, size_t dataLen);
+size_t BRBIP39Encode(char *phrase, size_t phraseLen, const char *wordList[], const uint8_t *data, size_t dataLen);
 
 // returns number of bytes written to data, or dataLen needed if data is NULL
-size_t BWBIP39Decode(uint8_t *data, size_t dataLen, const char *wordList[], const char *phrase);
+size_t BRBIP39Decode(uint8_t *data, size_t dataLen, const char *wordList[], const char *phrase);
 
 // verifies that all phrase words are contained in wordlist and checksum is valid
-int BWBIP39PhraseIsValid(const char *wordList[], const char *phrase);
+int BRBIP39PhraseIsValid(const char *wordList[], const char *phrase);
 
 // key64 must hold 64 bytes (512 bits), phrase and passphrase must be unicode NFKD normalized
 // http://www.unicode.org/reports/tr15/#Norm_Forms
 // BUG: does not currently support passphrases containing NULL characters
-void BWBIP39DeriveKey(void *key64, const char *phrase, const char *passphrase);
+void BRBIP39DeriveKey(void *key64, const char *phrase, const char *passphrase);
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif // BWBIP39Mnemonic_h
+#endif // BRBIP39Mnemonic_h

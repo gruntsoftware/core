@@ -1,5 +1,5 @@
 //
-//  BWAddress.h
+//  BRAddress.h
 //
 //  Created by Aaron Voisine on 9/18/15.
 //  Copyright (c) 2015 breadwallet LLC
@@ -22,10 +22,10 @@
 //  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 //  THE SOFTWARE.
 
-#ifndef BWAddress_h
-#define BWAddress_h
+#ifndef BRAddress_h
+#define BRAddress_h
 
-#include "BWCrypto.h"
+#include "BRCrypto.h"
 #include <string.h>
 #include <stddef.h>
 #include <inttypes.h>
@@ -60,69 +60,69 @@ extern "C" {
 
 // reads a varint from buf and stores its length in intLen if intLen is non-NULL
 // returns the varint value
-uint64_t BWVarInt(const uint8_t *buf, size_t bufLen, size_t *intLen);
+uint64_t BRVarInt(const uint8_t *buf, size_t bufLen, size_t *intLen);
 
 // writes i to buf as a varint and returns the number of bytes written, or bufLen needed if buf is NULL
-size_t BWVarIntSet(uint8_t *buf, size_t bufLen, uint64_t i);
+size_t BRVarIntSet(uint8_t *buf, size_t bufLen, uint64_t i);
 
 // returns the number of bytes needed to encode i as a varint
-size_t BWVarIntSize(uint64_t i);
+size_t BRVarIntSize(uint64_t i);
 
 // parses script and writes an array of pointers to the script elements (opcodes and data pushes) to elems
 // returns the number of elements written, or elemsCount needed if elems is NULL
-size_t BWScriptElements(const uint8_t *elems[], size_t elemsCount, const uint8_t *script, size_t scriptLen);
+size_t BRScriptElements(const uint8_t *elems[], size_t elemsCount, const uint8_t *script, size_t scriptLen);
 
 // given a data push script element, returns a pointer to the start of the data and writes its length to dataLen
-const uint8_t *BWScriptData(const uint8_t *elem, size_t *dataLen);
+const uint8_t *BRScriptData(const uint8_t *elem, size_t *dataLen);
 
 // writes a data push script element to script
 // returns the number of bytes written, or scriptLen needed if script is NULL
-size_t BWScriptPushData(uint8_t *script, size_t scriptLen, const uint8_t *data, size_t dataLen);
+size_t BRScriptPushData(uint8_t *script, size_t scriptLen, const uint8_t *data, size_t dataLen);
 
 typedef struct {
     char s[75];
-} BWAddress;
+} BRAddress;
 
-#define BW_ADDRESS_NONE ((BWAddress) { "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"\
+#define BR_ADDRESS_NONE ((BRAddress) { "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"\
                                        "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0" })
 
 // writes the bitcoin address for a scriptPubKey to addr
 // returns the number of bytes written, or addrLen needed if addr is NULL
-size_t BWAddressFromScriptPubKey(char *addr, size_t addrLen, const uint8_t *script, size_t scriptLen);
+size_t BRAddressFromScriptPubKey(char *addr, size_t addrLen, const uint8_t *script, size_t scriptLen);
 
 // writes the bitcoin address for a scriptSig to addr
 // returns the number of bytes written, or addrLen needed if addr is NULL
-size_t BWAddressFromScriptSig(char *addr, size_t addrLen, const uint8_t *script, size_t scriptLen);
+size_t BRAddressFromScriptSig(char *addr, size_t addrLen, const uint8_t *script, size_t scriptLen);
 
 // writes the bitcoin address for a witness to addr
 // returns the number of bytes written, or addrLen needed if addr is NULL
-size_t BWAddressFromWitness(char *addr, size_t addrLen, const uint8_t *witness, size_t witLen);
+size_t BRAddressFromWitness(char *addr, size_t addrLen, const uint8_t *witness, size_t witLen);
 
 // writes the scriptPubKey for addr to script
 // returns the number of bytes written, or scriptLen needed if script is NULL
-size_t BWAddressScriptPubKey(uint8_t *script, size_t scriptLen, const char *addr);
+size_t BRAddressScriptPubKey(uint8_t *script, size_t scriptLen, const char *addr);
 
 // returns true if addr is a valid bitcoin address
-int BWAddressIsValid(const char *addr);
+int BRAddressIsValid(const char *addr);
 
 // writes the 20 byte hash160 of addr to md20 and returns true on success
-int BWAddressHash160(void *md20, const char *addr);
+int BRAddressHash160(void *md20, const char *addr);
 
 // returns a hash value for addr suitable for use in a hashtable
-inline static size_t BWAddressHash(const void *addr)
+inline static size_t BRAddressHash(const void *addr)
 {
-    return BWMurmur3_32(addr, strlen((const char *)addr), 0);
+    return BRMurmur3_32(addr, strlen((const char *)addr), 0);
 }
 
 // true if addr and otherAddr are equal
-inline static int BWAddressEq(const void *addr, const void *otherAddr)
+inline static int BRAddressEq(const void *addr, const void *otherAddr)
 {
     return (addr == otherAddr ||
-            strncmp((const char *)addr, (const char *)otherAddr, sizeof(BWAddress)) == 0);
+            strncmp((const char *)addr, (const char *)otherAddr, sizeof(BRAddress)) == 0);
 }
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif // BWAddress_h
+#endif // BRAddress_h
