@@ -48,6 +48,9 @@
 #pragma clang diagnostic ignored "-Wunused-function"
 #pragma GCC diagnostic ignored "-Wunused-function"
 #pragma clang diagnostic ignored "-Wconditional-uninitialized"
+// secp256k1 needs to match the commit as the client codebase 
+// Android: app/src/main/secp/secp256k1
+// iOS: nan
 #include "secp256k1/src/basic-config.h"
 #include "secp256k1/src/secp256k1.c"
 #pragma clang diagnostic pop
