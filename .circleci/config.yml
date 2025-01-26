@@ -1,0 +1,97 @@
+# .circleci/config.yml
+# CI pipeline for gruntsoftware/core (SPV Litecoin wallet C library)
+#
+# IMPORTANT: This project depends on secp256k1 pinned at commit b408c6a.
+# That was the last commit where Bitcoin Core included basic-config.h,
+# which BRKey.c requires (#include "secp256k1/src/basic-config.h").
+# Later secp256k1 commits removed this file and require autotools/cmake
+# to generate libsecp256k1-config.h instead. We cannot use those.
+
+version: 2.1
+
+jobs:
+  build-and-test:
+    docker:
+      - image: cimg/base:2024.09
+    resource_class: medium
+    steps:
+      - checkout
+
+      - run:
+          name: Init secp256k1 submodule
+          command: git submodule update --init --recursive
+
+      - run:
+          name: Verify secp256k1 pinned at b408c6a
+          command: |
+            cd secp256k1
+            ACTUAL=$(git rev-parse HEAD)
+            EXPECTED="b408c6a8b287003d1ade5709e6f7bc3c7f1d5be7"
+            if [ "$ACTUAL" != "$EXPECTED" ]; then
+              echo "============================================="
+              echo "FATAL: secp256k1 submodule at wrong commit!"
+              echo "  Expected: $EXPECTED"
+              echo "  Actual:   $ACTUAL"
+              echo ""
+              echo "BRKey.c requires secp256k1/src/basic-config.h"
+              echo "which was removed in later secp256k1 commits."
+              echo "============================================="
+              exit 1
+            fi
+            # Also verify the critical file actually exists
+            if [ ! -f src/basic-config.h ]; then
+              echo "FATAL: secp256k1/src/basic-config.h not found!"
+              echo "Submodule may be at wrong commit or corrupt."
+              exit 1
+            fi
+            echo "secp256k1 correctly pinned at $EXPECTED"
+            echo "secp256k1/src/basic-config.h present"
+
+      - run:
+          name: Install build dependencies
+          command: sudo apt-get update && sudo apt-get install -y build-essential
+
+      - run:
+          name: Compile test binary (mainnet)
+          command: make all
+
+      - run:
+          name: Run tests (mainnet)
+          command: make test
+
+      - run:
+          name: Compile and run tests (testnet)
+          command: make testnet
+
+  build-asan:
+    docker:
+      - image: cimg/base:2024.09
+    resource_class: medium
+    steps:
+      - checkout
+
+      - run:
+          name: Init secp256k1 submodule
+          command: git submodule update --init --recursive
+
+      - run:
+          name: Install build dependencies
+          command: sudo apt-get update && sudo apt-get install -y build-essential
+
+      - run:
+          name: Compile with AddressSanitizer
+          command: |
+            make clean
+            make all CC=gcc CFLAGS="-std=c99 -D_DEFAULT_SOURCE -Wall -O1 -g -fsanitize=address -fno-omit-frame-pointer -I. -Isecp256k1" LDFLAGS="-lpthread -lm -fsanitize=address"
+
+      - run:
+          name: Run tests under ASan
+          command: ./test_runner
+
+workflows:
+  core-ci:
+    jobs:
+      - build-and-test
+      - build-asan:
+          requires:
+            - build-and-test
