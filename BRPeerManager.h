@@ -57,6 +57,8 @@ BRPeerManager *BRPeerManagerNew(const BRChainParams *params, BRWallet *wallet, u
 // - if replace is true, remove any previously saved peers first
 // int networkIsReachable(void *) - must return true when networking is available, false otherwise
 // void threadCleanup(void *) - called before a thread terminates to faciliate any needed cleanup
+// int isFeatureSelectedPeersOn(void *) - obtain enable/disable feature selected peers
+// char **(*fetchSelectedPeers)(void *info) - obtain list of selected peers
 void BRPeerManagerSetCallbacks(BRPeerManager *manager, void *info,
                                void (*syncStarted)(void *info),
                                void (*syncStopped)(void *info, int error),
@@ -64,7 +66,9 @@ void BRPeerManagerSetCallbacks(BRPeerManager *manager, void *info,
                                void (*saveBlocks)(void *info, int replace, BRMerkleBlock *blocks[], size_t blocksCount),
                                void (*savePeers)(void *info, int replace, const BRPeer peers[], size_t peersCount),
                                int (*networkIsReachable)(void *info),
-                               void (*threadCleanup)(void *info));
+                               void (*threadCleanup)(void *info),
+                               int (*isFeatureSelectedPeersOn)(void *info),
+                               char **(*fetchSelectedPeers)(void *info));
 
 // specifies a single fixed peer to use when connecting to the bitcoin network
 // set address to UINT128_ZERO to revert to default behavior

@@ -189,6 +189,8 @@ struct BRPeerManagerStruct {
     void (*savePeers)(void *info, int replace, const BRPeer peers[], size_t peersCount);
     int (*networkIsReachable)(void *info);
     void (*threadCleanup)(void *info);
+    int (*isFeatureSelectedPeersOn)(void *info);
+    char **(*selectedPeerIPs)(void *info);
     pthread_mutex_t lock;
 };
 
@@ -751,49 +753,13 @@ static void _BRPeerManagerFindPeersV2(BRPeerManager *manager)
     UInt128 *addr, *addrList;
     BRFindPeersInfo *info;
 
-    //TODO: WIP HERE, get from shared prefs
-    // List of hardcoded IP addresses (replace with actual IPs for your network)
-    // Ensure these peers are reliable and support SPV mode.
-    const char *hardcodedIPs[] = {
-            "104.248.144.99",
-            "111.108.29.123",
-            "173.212.217.55",
-            "103.106.231.72",
-            "103.75.119.14",
-            "109.199.121.131",
-            "134.195.198.75",
-            "103.211.103.207",
-            "104.143.2.195",
-            "108.181.2.221",
-            "108.234.193.105",
-            "116.203.72.169",
-            "13.212.52.149",
-            "132.145.129.176",
-            "108.94.105.78",
-            "116.203.4.236",
-            "134.119.221.106",
-            "104.172.235.227",
-            "104.200.16.92",
-            "108.56.76.129",
-            "109.202.213.54",
-            "109.248.11.70",
-            "109.87.166.145",
-            "118.223.85.60",
-            "122.155.3.47",
-            "123.50.73.97",
-            "128.140.89.102",
-            "13.228.203.165",
-            "13.250.19.201",
-            "13.87.87.12",
-            "134.119.176.59",
-            "134.195.198.209",
-            "134.195.198.39",
-            "135.129.154.242",
-            "135.181.107.89",
-            "18.204.86.135",
-            "185.100.85.21",
-            NULL // Terminator
-    };
+    // Use selectedPeerIPs if available and not empty, otherwise fallback to old flow
+    char **hardcodedIPs = manager->selectedPeerIPs ? manager->selectedPeerIPs(manager->info) : NULL;
+    if (!hardcodedIPs || !hardcodedIPs[0]) {
+        peer_log(&BR_PEER_NONE, "Selected Peer IPs empty, fallback to old flow");
+        _BRPeerManagerFindPeers(manager);
+        return;
+    }
 
     for (int i = 0; hardcodedIPs[i] != NULL; i++) {
         UInt128 peerAddr = UINT128_ZERO;
@@ -1702,6 +1668,8 @@ BRPeerManager *BRPeerManagerNew(const BRChainParams *params, BRWallet *wallet, u
 // - if replace is true, remove any previously saved peers first
 // int networkIsReachable(void *) - must return true when networking is available, false otherwise
 // void threadCleanup(void *) - called before a thread terminates to faciliate any needed cleanup
+// int isFeatureSelectedPeersOn(void *) - obtain enable/disable feature selected peers
+// char **(*fetchSelectedPeers)(void *info) - obtain list of selected peers
 void BRPeerManagerSetCallbacks(BRPeerManager *manager, void *info,
                                void (*syncStarted)(void *info),
                                void (*syncStopped)(void *info, int error),
@@ -1709,7 +1677,9 @@ void BRPeerManagerSetCallbacks(BRPeerManager *manager, void *info,
                                void (*saveBlocks)(void *info, int replace, BRMerkleBlock *blocks[], size_t blocksCount),
                                void (*savePeers)(void *info, int replace, const BRPeer peers[], size_t peersCount),
                                int (*networkIsReachable)(void *info),
-                               void (*threadCleanup)(void *info))
+                               void (*threadCleanup)(void *info),
+                               int (*isFeatureSelectedPeersOn)(void *info),
+                               char **(*fetchSelectedPeers)(void *info))
 {
     assert(manager != NULL);
     manager->info = info;
@@ -1720,6 +1690,8 @@ void BRPeerManagerSetCallbacks(BRPeerManager *manager, void *info,
     manager->savePeers = savePeers;
     manager->networkIsReachable = networkIsReachable;
     manager->threadCleanup = (threadCleanup) ? threadCleanup : _dummyThreadCleanup;
+    manager->isFeatureSelectedPeersOn = (isFeatureSelectedPeersOn) ? isFeatureSelectedPeersOn : 0;
+    manager->selectedPeerIPs = fetchSelectedPeers;
 }
 
 // specifies a single fixed peer to use when connecting to the bitcoin network
@@ -1789,9 +1761,12 @@ void BRPeerManagerConnect(BRPeerManager *manager)
 
         if (array_count(manager->peers) < manager->maxConnectCount ||
             manager->peers[manager->maxConnectCount - 1].timestamp + 3*24*60*60 < now) {
-            //TODO: WIP here add logic enable/disable
-//            _BRPeerManagerFindPeers(manager);
-            _BRPeerManagerFindPeersV2(manager);
+            peer_log(&BR_PEER_NONE, "isFeatureSelectedPeersOn: %d", (manager->isFeatureSelectedPeersOn ? manager->isFeatureSelectedPeersOn(manager->info) : 0));
+            if (manager->isFeatureSelectedPeersOn) {
+                _BRPeerManagerFindPeersV2(manager);
+            } else {
+                _BRPeerManagerFindPeers(manager);
+            }
         }
 
         array_new(peers, 100);
