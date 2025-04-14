@@ -38,6 +38,7 @@
 #include <netdb.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <arpa/inet.h>
 
 #define PROTOCOL_TIMEOUT      20.0
 #define MAX_CONNECT_FAILURES  20 // notify user of network problems after this many connect failures in a row
@@ -736,6 +737,98 @@ static void _BRPeerManagerFindPeers(BRPeerManager *manager)
         } while (manager->dnsThreadCount > 0 && array_count(manager->peers) < PEER_MAX_CONNECTIONS);
 
         qsort(manager->peers, array_count(manager->peers), sizeof(*manager->peers), _peerTimestampCompare);
+    }
+}
+
+// DNS peer discovery V2 (New)
+static void _BRPeerManagerFindPeersV2(BRPeerManager *manager)
+{
+    uint64_t services = SERVICES_NODE_NETWORK | SERVICES_NODE_BLOOM | manager->params->services;
+    time_t now = time(NULL);
+    struct timespec ts;
+    pthread_t thread;
+    pthread_attr_t attr;
+    UInt128 *addr, *addrList;
+    BRFindPeersInfo *info;
+
+    //TODO: WIP HERE, get from shared prefs
+    // List of hardcoded IP addresses (replace with actual IPs for your network)
+    // Ensure these peers are reliable and support SPV mode.
+    const char *hardcodedIPs[] = {
+            "104.248.144.99",
+            "111.108.29.123",
+            "173.212.217.55",
+            "103.106.231.72",
+            "103.75.119.14",
+            "109.199.121.131",
+            "134.195.198.75",
+            "103.211.103.207",
+            "104.143.2.195",
+            "108.181.2.221",
+            "108.234.193.105",
+            "116.203.72.169",
+            "13.212.52.149",
+            "132.145.129.176",
+            "108.94.105.78",
+            "116.203.4.236",
+            "134.119.221.106",
+            "104.172.235.227",
+            "104.200.16.92",
+            "108.56.76.129",
+            "109.202.213.54",
+            "109.248.11.70",
+            "109.87.166.145",
+            "118.223.85.60",
+            "122.155.3.47",
+            "123.50.73.97",
+            "128.140.89.102",
+            "13.228.203.165",
+            "13.250.19.201",
+            "13.87.87.12",
+            "134.119.176.59",
+            "134.195.198.209",
+            "134.195.198.39",
+            "135.129.154.242",
+            "135.181.107.89",
+            "18.204.86.135",
+            "185.100.85.21",
+            NULL // Terminator
+    };
+
+    for (int i = 0; hardcodedIPs[i] != NULL; i++) {
+        UInt128 peerAddr = UINT128_ZERO;
+        struct in6_addr v6addr;
+        struct in_addr v4addr;
+
+        // Try parsing as IPv6 first
+        if (inet_pton(AF_INET6, hardcodedIPs[i], &v6addr) == 1) {
+            // Successfully parsed as IPv6
+            memcpy(&peerAddr.u8[0], &v6addr.s6_addr[0], 16);
+        }
+            // Try parsing as IPv4
+        else if (inet_pton(AF_INET, hardcodedIPs[i], &v4addr) == 1) {
+            // Successfully parsed as IPv4 - map to IPv6 format ::ffff:ipv4
+            peerAddr.u16[5] = 0xffff;
+            peerAddr.u32[3] = v4addr.s_addr;
+        } else {
+            // Invalid IP address string format
+            peer_log(&BR_PEER_NONE, "Invalid hardcoded IP address format: %s", hardcodedIPs[i]);
+            continue; // Skip this entry
+        }
+
+        // Check if peer already exists (optional, prevents duplicates if also found via DNS)
+        int exists = 0;
+        for(size_t j=0; j < array_count(manager->peers); j++) {
+            if (UInt128Eq(manager->peers[j].address, peerAddr) && manager->peers[j].port == manager->params->standardPort) {
+                exists = 1;
+                break;
+            }
+        }
+
+        if (!exists && !UInt128IsZero(peerAddr)) {
+            array_add(manager->peers, ((BRPeer) { peerAddr, manager->params->standardPort, services, now, 0 }));
+            peer_log(&BR_PEER_NONE, "Added hardcoded peer: %s", hardcodedIPs[i]);
+        }
     }
 }
 
@@ -1696,7 +1789,9 @@ void BRPeerManagerConnect(BRPeerManager *manager)
 
         if (array_count(manager->peers) < manager->maxConnectCount ||
             manager->peers[manager->maxConnectCount - 1].timestamp + 3*24*60*60 < now) {
-            _BRPeerManagerFindPeers(manager);
+            //TODO: WIP here add logic enable/disable
+//            _BRPeerManagerFindPeers(manager);
+            _BRPeerManagerFindPeersV2(manager);
         }
 
         array_new(peers, 100);
