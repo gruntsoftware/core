@@ -1769,9 +1769,9 @@ void BRPeerManagerConnect(BRPeerManager *manager)
             }
         }
 
-        array_new(peers, 100);
+        array_new(peers, 175);
         array_add_array(peers, manager->peers,
-                        (array_count(manager->peers) < 100) ? array_count(manager->peers) : 100);
+                        (array_count(manager->peers) < 175) ? array_count(manager->peers) : 175);
 
         while (array_count(peers) > 0 && array_count(manager->connectedPeers) < manager->maxConnectCount) {
             size_t i = BRRand((uint32_t)array_count(peers)); // index of random peer
