@@ -38,6 +38,7 @@
 #include <netdb.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <arpa/inet.h>
 
 #define PROTOCOL_TIMEOUT      20.0
 #define MAX_CONNECT_FAILURES  20 // notify user of network problems after this many connect failures in a row
@@ -188,6 +189,8 @@ struct BRPeerManagerStruct {
     void (*savePeers)(void *info, int replace, const BRPeer peers[], size_t peersCount);
     int (*networkIsReachable)(void *info);
     void (*threadCleanup)(void *info);
+    int (*isFeatureSelectedPeersOn)(void *info);
+    char **(*selectedPeerIPs)(void *info);
     pthread_mutex_t lock;
 };
 
@@ -736,6 +739,62 @@ static void _BRPeerManagerFindPeers(BRPeerManager *manager)
         } while (manager->dnsThreadCount > 0 && array_count(manager->peers) < PEER_MAX_CONNECTIONS);
 
         qsort(manager->peers, array_count(manager->peers), sizeof(*manager->peers), _peerTimestampCompare);
+    }
+}
+
+// DNS peer discovery V2 (New)
+static void _BRPeerManagerFindPeersV2(BRPeerManager *manager)
+{
+    uint64_t services = SERVICES_NODE_NETWORK | SERVICES_NODE_BLOOM | manager->params->services;
+    time_t now = time(NULL);
+    struct timespec ts;
+    pthread_t thread;
+    pthread_attr_t attr;
+    UInt128 *addr, *addrList;
+    BRFindPeersInfo *info;
+
+    // Use selectedPeerIPs if available and not empty, otherwise fallback to old flow
+    char **hardcodedIPs = manager->selectedPeerIPs ? manager->selectedPeerIPs(manager->info) : NULL;
+    if (!hardcodedIPs || !hardcodedIPs[0]) {
+        peer_log(&BR_PEER_NONE, "Selected Peer IPs empty, fallback to old flow");
+        _BRPeerManagerFindPeers(manager);
+        return;
+    }
+
+    for (int i = 0; hardcodedIPs[i] != NULL; i++) {
+        UInt128 peerAddr = UINT128_ZERO;
+        struct in6_addr v6addr;
+        struct in_addr v4addr;
+
+        // Try parsing as IPv6 first
+        if (inet_pton(AF_INET6, hardcodedIPs[i], &v6addr) == 1) {
+            // Successfully parsed as IPv6
+            memcpy(&peerAddr.u8[0], &v6addr.s6_addr[0], 16);
+        }
+            // Try parsing as IPv4
+        else if (inet_pton(AF_INET, hardcodedIPs[i], &v4addr) == 1) {
+            // Successfully parsed as IPv4 - map to IPv6 format ::ffff:ipv4
+            peerAddr.u16[5] = 0xffff;
+            peerAddr.u32[3] = v4addr.s_addr;
+        } else {
+            // Invalid IP address string format
+            peer_log(&BR_PEER_NONE, "Invalid hardcoded IP address format: %s", hardcodedIPs[i]);
+            continue; // Skip this entry
+        }
+
+        // Check if peer already exists (optional, prevents duplicates if also found via DNS)
+        int exists = 0;
+        for(size_t j=0; j < array_count(manager->peers); j++) {
+            if (UInt128Eq(manager->peers[j].address, peerAddr) && manager->peers[j].port == manager->params->standardPort) {
+                exists = 1;
+                break;
+            }
+        }
+
+        if (!exists && !UInt128IsZero(peerAddr)) {
+            array_add(manager->peers, ((BRPeer) { peerAddr, manager->params->standardPort, services, now, 0 }));
+            peer_log(&BR_PEER_NONE, "Added hardcoded peer: %s", hardcodedIPs[i]);
+        }
     }
 }
 
@@ -1609,6 +1668,8 @@ BRPeerManager *BRPeerManagerNew(const BRChainParams *params, BRWallet *wallet, u
 // - if replace is true, remove any previously saved peers first
 // int networkIsReachable(void *) - must return true when networking is available, false otherwise
 // void threadCleanup(void *) - called before a thread terminates to faciliate any needed cleanup
+// int isFeatureSelectedPeersOn(void *) - obtain enable/disable feature selected peers
+// char **(*fetchSelectedPeers)(void *info) - obtain list of selected peers
 void BRPeerManagerSetCallbacks(BRPeerManager *manager, void *info,
                                void (*syncStarted)(void *info),
                                void (*syncStopped)(void *info, int error),
@@ -1616,7 +1677,9 @@ void BRPeerManagerSetCallbacks(BRPeerManager *manager, void *info,
                                void (*saveBlocks)(void *info, int replace, BRMerkleBlock *blocks[], size_t blocksCount),
                                void (*savePeers)(void *info, int replace, const BRPeer peers[], size_t peersCount),
                                int (*networkIsReachable)(void *info),
-                               void (*threadCleanup)(void *info))
+                               void (*threadCleanup)(void *info),
+                               int (*isFeatureSelectedPeersOn)(void *info),
+                               char **(*fetchSelectedPeers)(void *info))
 {
     assert(manager != NULL);
     manager->info = info;
@@ -1627,6 +1690,8 @@ void BRPeerManagerSetCallbacks(BRPeerManager *manager, void *info,
     manager->savePeers = savePeers;
     manager->networkIsReachable = networkIsReachable;
     manager->threadCleanup = (threadCleanup) ? threadCleanup : _dummyThreadCleanup;
+    manager->isFeatureSelectedPeersOn = (isFeatureSelectedPeersOn) ? isFeatureSelectedPeersOn : 0;
+    manager->selectedPeerIPs = fetchSelectedPeers;
 }
 
 // specifies a single fixed peer to use when connecting to the bitcoin network
@@ -1696,12 +1761,17 @@ void BRPeerManagerConnect(BRPeerManager *manager)
 
         if (array_count(manager->peers) < manager->maxConnectCount ||
             manager->peers[manager->maxConnectCount - 1].timestamp + 3*24*60*60 < now) {
-            _BRPeerManagerFindPeers(manager);
+            peer_log(&BR_PEER_NONE, "isFeatureSelectedPeersOn: %d", (manager->isFeatureSelectedPeersOn ? manager->isFeatureSelectedPeersOn(manager->info) : 0));
+            if (manager->isFeatureSelectedPeersOn) {
+                _BRPeerManagerFindPeersV2(manager);
+            } else {
+                _BRPeerManagerFindPeers(manager);
+            }
         }
 
-        array_new(peers, 100);
+        array_new(peers, 175);
         array_add_array(peers, manager->peers,
-                        (array_count(manager->peers) < 100) ? array_count(manager->peers) : 100);
+                        (array_count(manager->peers) < 175) ? array_count(manager->peers) : 175);
 
         while (array_count(peers) > 0 && array_count(manager->connectedPeers) < manager->maxConnectCount) {
             size_t i = BRRand((uint32_t)array_count(peers)); // index of random peer
