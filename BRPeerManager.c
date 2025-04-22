@@ -189,8 +189,6 @@ struct BRPeerManagerStruct {
     void (*savePeers)(void *info, int replace, const BRPeer peers[], size_t peersCount);
     int (*networkIsReachable)(void *info);
     void (*threadCleanup)(void *info);
-    int (*isFeatureSelectedPeersOn)(void *info);
-    char **(*selectedPeerIPs)(void *info);
     pthread_mutex_t lock;
 };
 
@@ -753,13 +751,123 @@ static void _BRPeerManagerFindPeersV2(BRPeerManager *manager)
     UInt128 *addr, *addrList;
     BRFindPeersInfo *info;
 
-    // Use selectedPeerIPs if available and not empty, otherwise fallback to old flow
-    char **hardcodedIPs = manager->selectedPeerIPs ? manager->selectedPeerIPs(manager->info) : NULL;
-    if (!hardcodedIPs || !hardcodedIPs[0]) {
-        peer_log(&BR_PEER_NONE, "Selected Peer IPs empty, fallback to old flow");
-        _BRPeerManagerFindPeers(manager);
-        return;
-    }
+    //TODO: WIP HERE, get from shared prefs
+    // List of hardcoded IP addresses (replace with actual IPs for your network)
+    // Ensure these peers are reliable and support SPV mode.
+    //source: csv file, https://github.com/gruntsoftware/internal/issues/122
+    const char *hardcodedIPs[] = {
+            "5.75.210.121",
+            "5.9.28.184",
+            "185.141.63.12",
+            "65.108.238.59",
+            "51.89.218.11",
+            "95.165.139.210",
+            "34.50.78.113",
+            "95.217.104.124",
+            "88.99.149.100",
+            "44.240.86.167",
+            "81.78.175.48",
+            "58.229.208.217",
+            "148.113.1.52",
+            "34.102.113.172",
+            "134.195.198.75",
+            "3.68.34.196",
+            "116.203.4.236",
+            "89.116.28.74",
+            "84.32.248.182",
+            "199.45.199.232",
+            "5.223.17.75",
+            "77.247.178.158",
+            "78.46.78.206",
+            "121.134.197.201",
+            "159.69.65.217",
+            "95.217.44.33",
+            "185.123.100.68",
+            "65.109.123.164",
+            "141.95.124.212",
+            "2.207.17.144",
+            "185.69.167.211",
+            "85.214.61.209",
+            "37.15.60.69",
+            "46.4.105.19",
+            "51.38.41.205",
+            "95.216.39.190",
+            "51.75.147.82",
+            "66.29.129.218",
+            "173.249.42.182",
+            "134.119.221.106",
+            "34.105.208.154",
+            "5.161.21.203",
+            "167.114.101.87",
+            "18.193.218.8",
+            "108.94.105.78",
+            "51.161.172.84",
+            "94.23.248.168",
+            "147.182.167.48",
+            "65.109.242.120",
+            "185.117.90.208",
+            "103.75.119.14",
+            "95.216.21.47",
+            "54.38.92.54",
+            "152.42.139.133",
+            "162.19.204.41",
+            "70.63.170.86",
+            "185.197.160.61",
+            "192.99.150.26",
+            "104.248.144.99",
+            "73.137.217.231",
+            "136.179.8.70",
+            "37.59.46.83",
+            "65.109.76.212",
+            "51.161.172.142",
+            "165.227.84.200",
+            "91.121.62.2",
+            "95.216.159.206",
+            "94.23.220.121",
+            "51.161.209.147",
+            "185.25.120.91",
+            "54.38.222.61",
+            "193.164.140.87",
+            "185.175.46.101",
+            "51.79.82.75",
+            "14.203.57.50",
+            "5.199.168.101",
+            "192.99.37.171",
+            "51.89.194.158",
+            "111.108.29.123",
+            "95.217.139.56",
+            "85.15.179.171",
+            "142.44.138.17",
+            "5.189.187.89",
+            "190.2.130.27",
+            "95.211.193.101",
+            "75.223.33.152",
+            "46.101.3.154",
+            "109.199.121.131",
+            "80.111.142.213",
+            "173.212.217.55",
+            "51.161.209.100",
+            "78.46.46.22",
+            "88.99.250.169",
+            "135.181.164.52",
+            "95.217.78.81",
+            "95.216.118.33",
+            "95.216.64.219",
+            "103.106.231.72",
+            "34.48.168.22",
+            "67.21.93.74",
+            "34.47.71.1",
+            "194.163.136.179",
+            "34.38.106.149",
+            "5.78.28.164",
+            "159.118.235.179",
+            "195.154.187.6",
+            "212.92.101.189",
+            "91.232.105.180",
+            "91.206.16.214",
+            "35.199.99.247",
+            NULL // Terminator
+    };
 
     for (int i = 0; hardcodedIPs[i] != NULL; i++) {
         UInt128 peerAddr = UINT128_ZERO;
@@ -1668,8 +1776,6 @@ BRPeerManager *BRPeerManagerNew(const BRChainParams *params, BRWallet *wallet, u
 // - if replace is true, remove any previously saved peers first
 // int networkIsReachable(void *) - must return true when networking is available, false otherwise
 // void threadCleanup(void *) - called before a thread terminates to faciliate any needed cleanup
-// int isFeatureSelectedPeersOn(void *) - obtain enable/disable feature selected peers
-// char **(*fetchSelectedPeers)(void *info) - obtain list of selected peers
 void BRPeerManagerSetCallbacks(BRPeerManager *manager, void *info,
                                void (*syncStarted)(void *info),
                                void (*syncStopped)(void *info, int error),
@@ -1677,9 +1783,7 @@ void BRPeerManagerSetCallbacks(BRPeerManager *manager, void *info,
                                void (*saveBlocks)(void *info, int replace, BRMerkleBlock *blocks[], size_t blocksCount),
                                void (*savePeers)(void *info, int replace, const BRPeer peers[], size_t peersCount),
                                int (*networkIsReachable)(void *info),
-                               void (*threadCleanup)(void *info),
-                               int (*isFeatureSelectedPeersOn)(void *info),
-                               char **(*fetchSelectedPeers)(void *info))
+                               void (*threadCleanup)(void *info))
 {
     assert(manager != NULL);
     manager->info = info;
@@ -1690,8 +1794,6 @@ void BRPeerManagerSetCallbacks(BRPeerManager *manager, void *info,
     manager->savePeers = savePeers;
     manager->networkIsReachable = networkIsReachable;
     manager->threadCleanup = (threadCleanup) ? threadCleanup : _dummyThreadCleanup;
-    manager->isFeatureSelectedPeersOn = (isFeatureSelectedPeersOn) ? isFeatureSelectedPeersOn : 0;
-    manager->selectedPeerIPs = fetchSelectedPeers;
 }
 
 // specifies a single fixed peer to use when connecting to the bitcoin network
@@ -1761,12 +1863,9 @@ void BRPeerManagerConnect(BRPeerManager *manager)
 
         if (array_count(manager->peers) < manager->maxConnectCount ||
             manager->peers[manager->maxConnectCount - 1].timestamp + 3*24*60*60 < now) {
-            peer_log(&BR_PEER_NONE, "isFeatureSelectedPeersOn: %d", (manager->isFeatureSelectedPeersOn ? manager->isFeatureSelectedPeersOn(manager->info) : 0));
-            if (manager->isFeatureSelectedPeersOn) {
-                _BRPeerManagerFindPeersV2(manager);
-            } else {
-                _BRPeerManagerFindPeers(manager);
-            }
+            //TODO: WIP here add logic enable/disable
+//            _BRPeerManagerFindPeers(manager);
+            _BRPeerManagerFindPeersV2(manager);
         }
 
         array_new(peers, 175);
