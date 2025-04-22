@@ -37,10 +37,12 @@
 #define _va_first(first, ...) first
 #define _va_rest(first, ...) __VA_ARGS__
 
-#if defined(TARGET_OS_MAC)
-#include <Foundation/Foundation.h>
-#define _peer_log(...) NSLog(__VA_ARGS__)
-#elif defined(__ANDROID__)
+    // NERFED iOS Logs: With iOS 18.4.1, the Modulemap causes conflicts and causes Xcode to not compile for the Foundation.h import
+    // 
+    // #if defined(TARGET_OS_MAC)
+    // #include <Foundation/Foundation.h>
+    // #define _peer_log(...) NSLog(__VA_ARGS__)
+#if defined(__ANDROID__)
 #include <android/log.h>
 #define _peer_log(...) __android_log_print(ANDROID_LOG_INFO, "bread", __VA_ARGS__)
 #else
