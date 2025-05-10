@@ -1,9 +1,4 @@
 module BRCore [system] [extern_c] {
-    
-    //--Added after iOS 18.4.1--//
-    link Foundation
-    requires objc
-    //--Added after iOS 18.4.1--//
        
     textual header "secp256k1/src/basic-config.h"
     textual header "secp256k1/src/secp256k1.c"
