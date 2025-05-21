@@ -441,10 +441,10 @@ static int _BRPeerAcceptTxMessage(BRPeer *peer, const uint8_t *msg, size_t msgLe
 
         if (txSize > 0 && tx->blockHeight == TX_UNCONFIRMED && feeAmount/txSize < 10) {
             //don't relay to wallet
-            peer_log(peer, "skipping stuck transaction: %s, (low fee: %llu sat/byte)", u256hex(txHash), feeAmount/txSize);
+            peer_log(peer, "skipping stuck transaction: %s, (low fee: %llu litoshis/byte, min. is 10 litoshis/byte)", u256hex(txHash), feeAmount/txSize);
             BRTransactionFree(tx);
             if (ctx->rejectedTx) ctx->rejectedTx(ctx->info, txHash, REJECT_LOWFEE);
-            return 1;
+            r = 1;
         }
         else if (ctx->relayedTx) {
             ctx->relayedTx(ctx->info, tx);
