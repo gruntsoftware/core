@@ -1258,13 +1258,6 @@ static void _peerRejectedTx(void *info, UInt256 txHash, uint8_t code)
     _BRTxPeerListRemovePeer(manager->txRequests, txHash, peer);
 
     if (tx) {
-
-        // Handle tx rejection
-        if (tx->blockHeight == TX_UNCONFIRMED && (code == REJECT_DUST || code == REJECT_LOWFEE || code == REJECT_NONSTANDARD)) {
-            peer_log(peer, "transaction rejected as dust/lowfee/nonstandard, removing: %s", u256hex(txHash));
-            BRWalletRemoveTransaction(manager->wallet, txHash);
-        }
-
         if (_BRTxPeerListRemovePeer(manager->txRelays, txHash, peer) && tx->blockHeight == TX_UNCONFIRMED) {
             // set timestamp 0 to mark tx as unverified
             _BRPeerManagerUpdateTx(manager, &txHash, 1, TX_UNCONFIRMED, 0);

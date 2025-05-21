@@ -415,38 +415,7 @@ static int _BRPeerAcceptTxMessage(BRPeer *peer, const uint8_t *msg, size_t msgLe
         txHash = tx->txHash;
         peer_log(peer, "got tx: %s", u256hex(txHash));
 
-        size_t txSize = BRTransactionSize(tx);
-        uint64_t feeAmount = BRTransactionStandardFee(tx);
-
-        //DEV: uncomment for debugging
-//        peer_log(peer, "tx details: hash=%s, version=%d, blockHeight=%d, timestamp=%d, lockTime=%u",
-//                 u256hex(tx->txHash), tx->version, tx->blockHeight, tx->timestamp, tx->lockTime);
-//
-//        peer_log(peer, "tx inputs: count=%zu", tx->inCount);
-//        for (size_t i = 0; i < tx->inCount; i++) {
-//            peer_log(peer, "  input[%zu]: txHash=%s, index=%u, signature length=%zu, sequence=%u",
-//                     i, u256hex(tx->inputs[i].txHash), tx->inputs[i].index,
-//                     tx->inputs[i].sigLen, tx->inputs[i].sequence);
-//        }
-//
-//        peer_log(peer, "tx outputs: count=%zu", tx->outCount);
-//        for (size_t j = 0; j < tx->outCount; j++) {
-//            char addr[75] = "";
-//            BRAddressFromScriptPubKey(addr, sizeof(addr), tx->outputs[j].script, tx->outputs[j].scriptLen);
-//            peer_log(peer, "  output[%zu]: amount=%llu, scriptLen=%zu, address=%s",
-//                     j, tx->outputs[j].amount, tx->outputs[j].scriptLen, addr);
-//        }
-//
-//        peer_log(peer, "tx size=%zu bytes, fee=%llu", txSize, feeAmount);
-
-        if (txSize > 0 && tx->blockHeight == TX_UNCONFIRMED && feeAmount/txSize < 10) {
-            //don't relay to wallet
-            peer_log(peer, "skipping stuck transaction: %s, (low fee: %llu sat/byte)", u256hex(txHash), feeAmount/txSize);
-            BRTransactionFree(tx);
-            if (ctx->rejectedTx) ctx->rejectedTx(ctx->info, txHash, REJECT_LOWFEE);
-            return 1;
-        }
-        else if (ctx->relayedTx) {
+        if (ctx->relayedTx) {
             ctx->relayedTx(ctx->info, tx);
         }
         else BRTransactionFree(tx);
