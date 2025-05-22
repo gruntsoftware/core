@@ -1224,31 +1224,31 @@ static void _peerHasTx(void *info, UInt256 txHash)
     if (tx) {
 
         //DEV: uncomment for debugging
-        peer_log(peer, "from _peer_hasTx");
-        size_t txSize = BRTransactionSize(tx);
-        uint64_t feeAmount = BRTransactionStandardFee(tx);
-        peer_log(peer, "tx details: hash=%s, version=%d, blockHeight=%d, timestamp=%d, lockTime=%u",
-                 u256hex(tx->txHash), tx->version, tx->blockHeight, tx->timestamp, tx->lockTime);
-
-        peer_log(peer, "tx inputs: count=%zu", tx->inCount);
-        for (size_t i = 0; i < tx->inCount; i++) {
-            peer_log(peer, "  input[%zu]: txHash=%s, index=%u, signature length=%zu, sequence=%u",
-                     i, u256hex(tx->inputs[i].txHash), tx->inputs[i].index,
-                     tx->inputs[i].sigLen, tx->inputs[i].sequence);
-        }
-
-        peer_log(peer, "tx outputs: count=%zu", tx->outCount);
-        for (size_t j = 0; j < tx->outCount; j++) {
-            char addr[75] = "";
-            BRAddressFromScriptPubKey(addr, sizeof(addr), tx->outputs[j].script, tx->outputs[j].scriptLen);
-            peer_log(peer, "  output[%zu]: amount=%llu, scriptLen=%zu, address=%s",
-                     j, tx->outputs[j].amount, tx->outputs[j].scriptLen, addr);
-        }
-
-        peer_log(peer, "tx size=%zu bytes, fee=%llu", txSize, feeAmount);
-        if (feeAmount/txSize < 10) {
-            peer_log(peer, "stuck tx: %s, (low fee: %llu lit/byte)", u256hex(tx->txHash), feeAmount/txSize);
-        }
+//        peer_log(peer, "from _peerHasTx");
+//        size_t txSize = BRTransactionSize(tx);
+//        uint64_t feeAmount = BRTransactionStandardFee(tx);
+//        peer_log(peer, "tx details: hash=%s, version=%d, blockHeight=%d, timestamp=%d, lockTime=%u",
+//                 u256hex(tx->txHash), tx->version, tx->blockHeight, tx->timestamp, tx->lockTime);
+//
+//        peer_log(peer, "tx inputs: count=%zu", tx->inCount);
+//        for (size_t i = 0; i < tx->inCount; i++) {
+//            peer_log(peer, "  input[%zu]: txHash=%s, index=%u, signature length=%zu, sequence=%u",
+//                     i, u256hex(tx->inputs[i].txHash), tx->inputs[i].index,
+//                     tx->inputs[i].sigLen, tx->inputs[i].sequence);
+//        }
+//
+//        peer_log(peer, "tx outputs: count=%zu", tx->outCount);
+//        for (size_t j = 0; j < tx->outCount; j++) {
+//            char addr[75] = "";
+//            BRAddressFromScriptPubKey(addr, sizeof(addr), tx->outputs[j].script, tx->outputs[j].scriptLen);
+//            peer_log(peer, "  output[%zu]: amount=%llu, scriptLen=%zu, address=%s",
+//                     j, tx->outputs[j].amount, tx->outputs[j].scriptLen, addr);
+//        }
+//
+//        peer_log(peer, "tx size=%zu bytes, fee=%llu", txSize, feeAmount);
+//        if (feeAmount/txSize < 10) {
+//            peer_log(peer, "stuck tx: %s, (low fee: %llu lit/byte)", u256hex(tx->txHash), feeAmount/txSize);
+//        }
 
 
         isWalletTx = BRWalletRegisterTransaction(manager->wallet, tx);
@@ -1287,13 +1287,6 @@ static void _peerRejectedTx(void *info, UInt256 txHash, uint8_t code)
     _BRTxPeerListRemovePeer(manager->txRequests, txHash, peer);
 
     if (tx) {
-
-        // Handle tx rejection
-//        if (tx->blockHeight == TX_UNCONFIRMED && (code == REJECT_DUST || code == REJECT_LOWFEE || code == REJECT_NONSTANDARD)) {
-//            peer_log(peer, "transaction rejected as dust/lowfee/nonstandard, removing: %s", u256hex(txHash));
-//            BRWalletRemoveTransaction(manager->wallet, txHash);
-//        }
-
         if (_BRTxPeerListRemovePeer(manager->txRelays, txHash, peer) && tx->blockHeight == TX_UNCONFIRMED) {
             // set timestamp 0 to mark tx as unverified
             _BRPeerManagerUpdateTx(manager, &txHash, 1, TX_UNCONFIRMED, 0);
