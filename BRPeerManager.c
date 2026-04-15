@@ -44,6 +44,8 @@
 #define MAX_CONNECT_FAILURES  20 // notify user of network problems after this many connect failures in a row
 #define PEER_FLAG_SYNCED      0x01
 #define PEER_FLAG_NEEDSUPDATE 0x02
+#define PARALLEL_SYNC_BATCH   250 // each peer gets a batch of this many block hashes per getdata round
+#define PARALLEL_BLOCK_BUFFER 512 // max blocks buffered from the alternate peer before processing
 
 #define genesis_block_hash(params) UInt256Reverse((params)->checkpoints[0].hash)
 
@@ -190,6 +192,23 @@ struct BRPeerManagerStruct {
     int (*networkIsReachable)(void *info);
     void (*threadCleanup)(void *info);
     pthread_mutex_t lock;
+
+    // --- Parallel sync (dual-peer) ---
+    BRPeer *downloadPeerAlt;                    // second download peer for parallel sync
+    int parallelSyncEnabled;                     // 1 = dual-peer sync active, 0 = legacy single-peer
+    int parallelSyncRunning;                     // 1 while the dispatcher thread is active
+    pthread_t parallelDispatchThread;            // coordinator thread
+    pthread_mutex_t parallelLock;                // protects the block buffer below
+    pthread_cond_t parallelCond;                 // signalled when a block arrives or sync ends
+    BRMerkleBlock **parallelBlockBuffer;         // ring buffer of blocks received from alt peer
+    size_t parallelBlockBufCount;                // number of blocks currently in buffer
+    uint32_t parallelNextExpectedHeight;         // next block height the processor expects
+    volatile int parallelSyncAbort;              // set to 1 to stop the dispatch thread
+    // Batch tracking: which hashes were assigned to which peer
+    UInt256 *evenBatchHashes;                    // block hashes assigned to downloadPeer (even batches)
+    size_t evenBatchCount;
+    UInt256 *oddBatchHashes;                     // block hashes assigned to downloadPeerAlt (odd batches)
+    size_t oddBatchCount;
 };
 
 static void _BRPeerManagerPeerMisbehavin(BRPeerManager *manager, BRPeer *peer)
@@ -906,6 +925,261 @@ static void _BRPeerManagerFindPeersV2(BRPeerManager *manager)
     }
 }
 
+// === PARALLEL SYNC (dual-peer) implementation ===
+
+// Insert a block into the parallel buffer, sorted by height.
+// Caller must hold manager->parallelLock.
+static void _parallelBufferInsert(BRPeerManager *manager, BRMerkleBlock *block)
+{
+    if (manager->parallelBlockBufCount >= PARALLEL_BLOCK_BUFFER) {
+        peer_log(&BR_PEER_NONE, "parallel buffer full, dropping block #%"PRIu32, block->height);
+        BRMerkleBlockFree(block);
+        return;
+    }
+
+    // insertion sort by height (buffer is small, this is fine)
+    size_t i = manager->parallelBlockBufCount;
+    manager->parallelBlockBufCount++;
+
+    while (i > 0 && manager->parallelBlockBuffer[i - 1]->height > block->height) {
+        manager->parallelBlockBuffer[i] = manager->parallelBlockBuffer[i - 1];
+        i--;
+    }
+    manager->parallelBlockBuffer[i] = block;
+}
+
+// Process blocks from the parallel buffer that are in sequential order starting from
+// parallelNextExpectedHeight. For each block, register its transactions with the wallet
+// and advance the chain. Called with manager->lock NOT held (we acquire it per-block).
+static void _parallelProcessBufferedBlocks(BRPeerManager *manager)
+{
+    while (1) {
+        BRMerkleBlock *block = NULL;
+
+        pthread_mutex_lock(&manager->parallelLock);
+
+        if (manager->parallelBlockBufCount > 0 &&
+            manager->parallelBlockBuffer[0]->height == manager->parallelNextExpectedHeight) {
+            block = manager->parallelBlockBuffer[0];
+            // shift buffer left
+            manager->parallelBlockBufCount--;
+            memmove(&manager->parallelBlockBuffer[0], &manager->parallelBlockBuffer[1],
+                    manager->parallelBlockBufCount * sizeof(BRMerkleBlock *));
+        }
+
+        pthread_mutex_unlock(&manager->parallelLock);
+
+        if (!block) break;
+
+        // Process this block the same way _peerRelayedBlock does for main chain extension
+        pthread_mutex_lock(&manager->lock);
+
+        size_t txCount = BRMerkleBlockTxHashes(block, NULL, 0);
+        UInt256 _txHashes[(sizeof(UInt256) * txCount <= 0x1000) ? txCount : 0];
+        UInt256 *txHashes = (sizeof(UInt256) * txCount <= 0x1000) ? _txHashes : malloc(txCount * sizeof(*txHashes));
+
+        assert(txHashes != NULL);
+        txCount = BRMerkleBlockTxHashes(block, txHashes, txCount);
+
+        BRMerkleBlock *prev = BRSetGet(manager->blocks, &block->prevBlock);
+        uint32_t txTime = 0;
+
+        if (prev) {
+            txTime = block->timestamp / 2 + prev->timestamp / 2;
+            block->height = prev->height + 1;
+        }
+
+        if (prev && UInt256Eq(block->prevBlock, manager->lastBlock->blockHash)) {
+            // extends main chain
+            if ((block->height % 500) == 0 || txCount > 0 || block->height >= manager->estimatedHeight) {
+                peer_log(&BR_PEER_NONE, "parallel: adding block #%"PRIu32, block->height);
+            }
+
+            BRSetAdd(manager->blocks, block);
+            manager->lastBlock = block;
+
+            if (txCount > 0) {
+                _BRPeerManagerUpdateTx(manager, txHashes, txCount, block->height, txTime);
+            }
+
+            if (manager->downloadPeer) BRPeerSetCurrentBlockHeight(manager->downloadPeer, block->height);
+            if (manager->downloadPeerAlt) BRPeerSetCurrentBlockHeight(manager->downloadPeerAlt, block->height);
+
+            manager->connectFailureCount = 0;
+
+            // save at difficulty transitions
+            size_t saveCount = 0;
+            if ((block->height % BLOCK_DIFFICULTY_INTERVAL) == 0) saveCount = 1;
+
+            if (block->height == manager->estimatedHeight) {
+                saveCount = (block->height % BLOCK_DIFFICULTY_INTERVAL) + BLOCK_DIFFICULTY_INTERVAL + 1;
+            }
+
+            if (saveCount > 0) {
+                BRMerkleBlock *saveBlocks[saveCount];
+                BRMerkleBlock *b = block;
+
+                for (size_t si = 0; b && si < saveCount; si++) {
+                    saveBlocks[si] = b;
+                    b = BRSetGet(manager->blocks, &b->prevBlock);
+                }
+
+                pthread_mutex_unlock(&manager->lock);
+                if (manager->saveBlocks) manager->saveBlocks(manager->info, (saveCount > 1 ? 1 : 0), saveBlocks, saveCount);
+                pthread_mutex_lock(&manager->lock);
+            }
+        } else {
+            // block doesn't extend main chain (orphan or already known) - buffer it as orphan
+            if (!prev) {
+                BRSetAdd(manager->orphans, block);
+                manager->lastOrphan = block;
+            } else {
+                BRSetAdd(manager->blocks, block);
+            }
+        }
+
+        if (txHashes != _txHashes) free(txHashes);
+
+        pthread_mutex_lock(&manager->parallelLock);
+        manager->parallelNextExpectedHeight = manager->lastBlock->height + 1;
+        pthread_mutex_unlock(&manager->parallelLock);
+
+        pthread_mutex_unlock(&manager->lock);
+    }
+}
+
+// Dispatch thread: splits incoming inv block hashes between two peers and sends getdata.
+// Blocks arrive via _peerRelayedBlock which deposits into the parallel buffer.
+// This thread then processes them in order.
+static void *_parallelSyncDispatchThread(void *arg)
+{
+    BRPeerManager *manager = (BRPeerManager *)arg;
+
+    pthread_cleanup_push(manager->threadCleanup, manager->info);
+
+    peer_log(&BR_PEER_NONE, "parallel sync dispatch thread started");
+
+    while (!manager->parallelSyncAbort) {
+        // Wait for blocks to arrive in the buffer
+        pthread_mutex_lock(&manager->parallelLock);
+
+        while (manager->parallelBlockBufCount == 0 && !manager->parallelSyncAbort) {
+            struct timespec ts;
+            clock_gettime(CLOCK_REALTIME, &ts);
+            ts.tv_sec += 1; // wake up every second to check abort flag
+            pthread_cond_timedwait(&manager->parallelCond, &manager->parallelLock, &ts);
+        }
+
+        pthread_mutex_unlock(&manager->parallelLock);
+
+        if (manager->parallelSyncAbort) break;
+
+        // Process any sequentially-available blocks
+        _parallelProcessBufferedBlocks(manager);
+
+        // Check if sync is complete
+        pthread_mutex_lock(&manager->lock);
+        int syncComplete = (manager->lastBlock->height >= manager->estimatedHeight);
+        pthread_mutex_unlock(&manager->lock);
+
+        if (syncComplete) {
+            peer_log(&BR_PEER_NONE, "parallel sync complete at height %"PRIu32, manager->lastBlock->height);
+            break;
+        }
+    }
+
+    pthread_mutex_lock(&manager->lock);
+    manager->parallelSyncRunning = 0;
+
+    // If sync completed, trigger mempool loads
+    if (manager->lastBlock->height >= manager->estimatedHeight) {
+        _BRPeerManagerLoadMempools(manager);
+    }
+
+    pthread_mutex_unlock(&manager->lock);
+
+    peer_log(&BR_PEER_NONE, "parallel sync dispatch thread exiting");
+
+    pthread_cleanup_pop(1);
+    return NULL;
+}
+
+// Start parallel sync with two download peers. Called with manager->lock held.
+static void _BRPeerManagerStartParallelSync(BRPeerManager *manager)
+{
+    if (!manager->downloadPeer || !manager->downloadPeerAlt) return;
+    if (manager->parallelSyncRunning) return;
+
+    peer_log(&BR_PEER_NONE, "starting parallel sync: peer1=%s, peer2=%s",
+             BRPeerHost(manager->downloadPeer), BRPeerHost(manager->downloadPeerAlt));
+
+    manager->parallelSyncAbort = 0;
+    manager->parallelSyncRunning = 1;
+    manager->parallelBlockBufCount = 0;
+    manager->parallelNextExpectedHeight = manager->lastBlock->height + 1;
+
+    // Load bloom filters on both peers
+    _BRPeerManagerLoadBloomFilter(manager, manager->downloadPeer);
+    _BRPeerManagerLoadBloomFilter(manager, manager->downloadPeerAlt);
+
+    BRPeerSetCurrentBlockHeight(manager->downloadPeer, manager->lastBlock->height);
+    BRPeerSetCurrentBlockHeight(manager->downloadPeerAlt, manager->lastBlock->height);
+
+    // Send getblocks from BOTH peers — they will each respond with inv messages.
+    // The _peerRelayedBlock handler will route blocks to the parallel buffer.
+    UInt256 locators[_BRPeerManagerBlockLocators(manager, NULL, 0)];
+    size_t count = _BRPeerManagerBlockLocators(manager, locators, sizeof(locators) / sizeof(*locators));
+
+    // Both peers get the same locators — the protocol will return block hashes from the chain tip they know
+    if (manager->lastBlock->timestamp + 7 * 24 * 60 * 60 >= manager->earliestKeyTime) {
+        BRPeerSendGetblocks(manager->downloadPeer, locators, count, UINT256_ZERO);
+        BRPeerSendGetblocks(manager->downloadPeerAlt, locators, count, UINT256_ZERO);
+    } else {
+        BRPeerSendGetheaders(manager->downloadPeer, locators, count, UINT256_ZERO);
+        BRPeerSendGetheaders(manager->downloadPeerAlt, locators, count, UINT256_ZERO);
+    }
+
+    BRPeerScheduleDisconnect(manager->downloadPeer, PROTOCOL_TIMEOUT);
+    BRPeerScheduleDisconnect(manager->downloadPeerAlt, PROTOCOL_TIMEOUT);
+
+    // Launch the dispatch/processing thread
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+    pthread_create(&manager->parallelDispatchThread, &attr, _parallelSyncDispatchThread, manager);
+    pthread_attr_destroy(&attr);
+}
+
+// Stop parallel sync. Safe to call even if not running. Called with manager->lock held.
+static void _BRPeerManagerStopParallelSync(BRPeerManager *manager)
+{
+    if (!manager->parallelSyncRunning) return;
+
+    manager->parallelSyncAbort = 1;
+
+    pthread_mutex_lock(&manager->parallelLock);
+    pthread_cond_signal(&manager->parallelCond);
+    pthread_mutex_unlock(&manager->parallelLock);
+
+    // Note: thread is detached, it will clean up on its own
+    manager->parallelSyncRunning = 0;
+
+    // Free any buffered blocks
+    pthread_mutex_lock(&manager->parallelLock);
+    for (size_t i = 0; i < manager->parallelBlockBufCount; i++) {
+        if (manager->parallelBlockBuffer[i]) BRMerkleBlockFree(manager->parallelBlockBuffer[i]);
+    }
+    manager->parallelBlockBufCount = 0;
+    pthread_mutex_unlock(&manager->parallelLock);
+}
+
+// Check if a peer is one of the two download peers in parallel mode
+static int _isParallelDownloadPeer(BRPeerManager *manager, BRPeer *peer)
+{
+    return (manager->parallelSyncRunning &&
+            (peer == manager->downloadPeer || peer == manager->downloadPeerAlt));
+}
+
 static void _peerConnected(void *info)
 {
     BRPeer *peer = ((BRPeerCallbackInfo *)info)->peer;
@@ -958,11 +1232,30 @@ static void _peerConnected(void *info)
                 BRPeerLastBlock(p) > BRPeerLastBlock(peer)) peer = p;
         }
 
-        if (manager->downloadPeer) {
+        if (manager->downloadPeer && peer != manager->downloadPeer) {
+            // Check if we should assign this as the alternate download peer for parallel sync
+            if (manager->parallelSyncEnabled && !manager->downloadPeerAlt &&
+                !manager->parallelSyncRunning &&
+                manager->lastBlock->height < manager->estimatedHeight &&
+                BRPeerLastBlock(peer) >= manager->estimatedHeight) {
+                // We already have a primary download peer and this peer is also suitable
+                // Assign as alternate and start parallel sync
+                manager->downloadPeerAlt = peer;
+                peer_log(peer, "assigned as alternate download peer for parallel sync");
+                _BRPeerManagerLoadBloomFilter(manager, peer);
+                BRPeerSetCurrentBlockHeight(peer, manager->lastBlock->height);
+                _BRPeerManagerStartParallelSync(manager);
+                pthread_mutex_unlock(&manager->lock);
+                return;
+            }
+
             peer_log(peer, "selecting new download peer with higher reported lastblock");
             BRPeerDisconnect(manager->downloadPeer);
         }
-        manager->downloadPeer = peer;
+
+        if (!manager->downloadPeer || peer != manager->downloadPeer) {
+            manager->downloadPeer = peer;
+        }
         manager->isConnected = 1;
         manager->estimatedHeight = BRPeerLastBlock(peer);
         _BRPeerManagerLoadBloomFilter(manager, peer);
@@ -1032,7 +1325,16 @@ static void _peerDisconnected(void *info, int error)
     if (peer == manager->downloadPeer) { // download peer disconnected
         manager->isConnected = 0;
         manager->downloadPeer = NULL;
+        if (manager->parallelSyncRunning) _BRPeerManagerStopParallelSync(manager);
         if (manager->connectFailureCount > MAX_CONNECT_FAILURES) manager->connectFailureCount = MAX_CONNECT_FAILURES;
+    }
+
+    if (peer == manager->downloadPeerAlt) { // alt download peer disconnected
+        manager->downloadPeerAlt = NULL;
+        if (manager->parallelSyncRunning) {
+            peer_log(peer, "alt download peer lost, falling back to single-peer sync");
+            _BRPeerManagerStopParallelSync(manager);
+        }
     }
 
     if (! manager->isConnected && manager->connectFailureCount == MAX_CONNECT_FAILURES) {
@@ -1217,7 +1519,8 @@ static void _peerHasTx(void *info, UInt256 txHash)
     }
 
     // cancel tx publish timeout if no publish callbacks are pending, and syncing is done or this is not downloadPeer
-    if (! hasPendingCallbacks && (manager->syncStartHeight == 0 || peer != manager->downloadPeer)) {
+    if (! hasPendingCallbacks && (manager->syncStartHeight == 0 ||
+        (peer != manager->downloadPeer && peer != manager->downloadPeerAlt))) {
         BRPeerScheduleDisconnect(peer, -1); // cancel publish tx timeout
     }
 
@@ -1226,7 +1529,8 @@ static void _peerHasTx(void *info, UInt256 txHash)
         if (isWalletTx) tx = BRWalletTransactionForHash(manager->wallet, tx->txHash);
 
         // reschedule sync timeout
-        if (manager->syncStartHeight > 0 && peer == manager->downloadPeer && isWalletTx) {
+        if (manager->syncStartHeight > 0 &&
+            (peer == manager->downloadPeer || peer == manager->downloadPeerAlt) && isWalletTx) {
             BRPeerScheduleDisconnect(peer, PROTOCOL_TIMEOUT);
         }
 
@@ -1337,6 +1641,59 @@ static void _peerRelayedBlock(void *info, BRMerkleBlock *block)
 {
     BRPeer *peer = ((BRPeerCallbackInfo *)info)->peer;
     BRPeerManager *manager = ((BRPeerCallbackInfo *)info)->manager;
+
+    // === PARALLEL SYNC: route blocks from both download peers into the shared buffer ===
+    if (manager->parallelSyncRunning && _isParallelDownloadPeer(manager, peer)) {
+        pthread_mutex_lock(&manager->lock);
+        BRMerkleBlock *prev = BRSetGet(manager->blocks, &block->prevBlock);
+        if (prev) block->height = prev->height + 1;
+
+        // Validate the block before buffering
+        if (prev && _BRPeerManagerVerifyBlock(manager, block, prev, peer)) {
+            // Reschedule timeout for whichever peer sent this
+            BRPeerScheduleDisconnect(peer, PROTOCOL_TIMEOUT);
+            manager->connectFailureCount = 0;
+
+            // Track bloom filter false positive rate (only for primary download peer)
+            if (peer == manager->downloadPeer && block->totalTx > 0) {
+                size_t txCount = BRMerkleBlockTxHashes(block, NULL, 0);
+                UInt256 txHashes[txCount];
+                size_t fpCount = 0;
+                BRMerkleBlockTxHashes(block, txHashes, txCount);
+                for (size_t fi = 0; fi < txCount; fi++) {
+                    if (!BRWalletTransactionForHash(manager->wallet, txHashes[fi])) fpCount++;
+                }
+                manager->averageTxPerBlock = manager->averageTxPerBlock * 0.999 + block->totalTx * 0.001;
+                manager->fpRate = manager->fpRate * (1.0 - 0.01 * block->totalTx / manager->averageTxPerBlock) +
+                                  0.01 * fpCount / manager->averageTxPerBlock;
+            }
+
+            pthread_mutex_unlock(&manager->lock);
+
+            // Insert into parallel buffer (separate lock)
+            pthread_mutex_lock(&manager->parallelLock);
+            _parallelBufferInsert(manager, block);
+            pthread_cond_signal(&manager->parallelCond);
+            pthread_mutex_unlock(&manager->parallelLock);
+
+            peer_log(peer, "parallel: buffered block #%"PRIu32" from %s",
+                     block->height, BRPeerHost(peer));
+        } else {
+            pthread_mutex_unlock(&manager->lock);
+            // Invalid or orphan during parallel sync — just add to blocks/orphans set normally
+            if (!prev) {
+                pthread_mutex_lock(&manager->lock);
+                BRSetAdd(manager->orphans, block);
+                manager->lastOrphan = block;
+                pthread_mutex_unlock(&manager->lock);
+            } else {
+                BRMerkleBlockFree(block);
+            }
+        }
+        return; // don't fall through to legacy processing
+    }
+
+    // === LEGACY single-peer block processing (original code below) ===
     size_t txCount = BRMerkleBlockTxHashes(block, NULL, 0);
     UInt256 _txHashes[(sizeof(UInt256)*txCount <= 0x1000) ? txCount : 0],
             *txHashes = (sizeof(UInt256)*txCount <= 0x1000) ? _txHashes : malloc(txCount*sizeof(*txHashes));
@@ -1762,6 +2119,23 @@ BRPeerManager *BRPeerManagerNew(const BRChainParams *params, BRWallet *wallet, u
     array_new(manager->publishedTxHashes, 10);
     pthread_mutex_init(&manager->lock, NULL);
     manager->threadCleanup = _dummyThreadCleanup;
+
+    // Initialize parallel sync state
+    manager->downloadPeerAlt = NULL;
+    manager->parallelSyncEnabled = 1; // enabled by default
+    manager->parallelSyncRunning = 0;
+    manager->parallelSyncAbort = 0;
+    manager->parallelBlockBuffer = calloc(PARALLEL_BLOCK_BUFFER, sizeof(BRMerkleBlock *));
+    assert(manager->parallelBlockBuffer != NULL);
+    manager->parallelBlockBufCount = 0;
+    manager->parallelNextExpectedHeight = 0;
+    manager->evenBatchHashes = NULL;
+    manager->evenBatchCount = 0;
+    manager->oddBatchHashes = NULL;
+    manager->oddBatchCount = 0;
+    pthread_mutex_init(&manager->parallelLock, NULL);
+    pthread_cond_init(&manager->parallelCond, NULL);
+
     return manager;
 }
 
@@ -1929,6 +2303,10 @@ void BRPeerManagerDisconnect(BRPeerManager *manager)
     assert(manager != NULL);
     pthread_mutex_lock(&manager->lock);
 
+    // Stop parallel sync before disconnecting peers
+    _BRPeerManagerStopParallelSync(manager);
+    manager->downloadPeerAlt = NULL;
+
     // prevent new peers from being spawned
     maxConnectCount = manager->maxConnectCount;
     manager->maxConnectCount = 0;
@@ -1967,6 +2345,10 @@ void BRPeerManagerRescan(BRPeerManager *manager)
     pthread_mutex_lock(&manager->lock);
 
     if (manager->isConnected) {
+        // Stop parallel sync if running
+        _BRPeerManagerStopParallelSync(manager);
+        manager->downloadPeerAlt = NULL;
+
         // start the chain download from the most recent checkpoint that's at least a week older than earliestKeyTime
         for (size_t i = manager->params->checkpointsCount; i > 0; i--) {
             if (i - 1 == 0 || manager->params->checkpoints[i - 1].timestamp + 7*24*60*60 < manager->earliestKeyTime) {
@@ -2175,11 +2557,25 @@ size_t BRPeerManagerRelayCount(BRPeerManager *manager, UInt256 txHash)
     return count;
 }
 
+// enable or disable dual-peer parallel sync
+void BRPeerManagerSetParallelSyncEnabled(BRPeerManager *manager, int enabled)
+{
+    assert(manager != NULL);
+    pthread_mutex_lock(&manager->lock);
+    manager->parallelSyncEnabled = enabled;
+    if (!enabled && manager->parallelSyncRunning) {
+        _BRPeerManagerStopParallelSync(manager);
+        manager->downloadPeerAlt = NULL;
+    }
+    pthread_mutex_unlock(&manager->lock);
+}
+
 // frees memory allocated for manager
 void BRPeerManagerFree(BRPeerManager *manager)
 {
     assert(manager != NULL);
     pthread_mutex_lock(&manager->lock);
+    _BRPeerManagerStopParallelSync(manager);
     array_free(manager->peers);
     for (size_t i = array_count(manager->connectedPeers); i > 0; i--) BRPeerFree(manager->connectedPeers[i - 1]);
     array_free(manager->connectedPeers);
@@ -2194,7 +2590,13 @@ void BRPeerManagerFree(BRPeerManager *manager)
     array_free(manager->txRequests);
     array_free(manager->publishedTx);
     array_free(manager->publishedTxHashes);
+    // Free parallel sync resources
+    if (manager->parallelBlockBuffer) free(manager->parallelBlockBuffer);
+    if (manager->evenBatchHashes) free(manager->evenBatchHashes);
+    if (manager->oddBatchHashes) free(manager->oddBatchHashes);
     pthread_mutex_unlock(&manager->lock);
     pthread_mutex_destroy(&manager->lock);
+    pthread_mutex_destroy(&manager->parallelLock);
+    pthread_cond_destroy(&manager->parallelCond);
     free(manager);
 }

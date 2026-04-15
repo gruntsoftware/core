@@ -3,6 +3,7 @@
 //
 //  Created by Aaron Voisine on 9/2/15.
 //  Copyright (c) 2015 breadwallet LLC.
+//  Modified by Grunt Software Ltd - dual-peer parallel sync
 //
 //  Permission is hereby granted, free of charge, to any person obtaining a copy
 //  of this software and associated documentation files (the "Software"), to deal
@@ -57,8 +58,6 @@ BRPeerManager *BRPeerManagerNew(const BRChainParams *params, BRWallet *wallet, u
 // - if replace is true, remove any previously saved peers first
 // int networkIsReachable(void *) - must return true when networking is available, false otherwise
 // void threadCleanup(void *) - called before a thread terminates to faciliate any needed cleanup
-// int isFeatureSelectedPeersOn(void *) - obtain enable/disable feature selected peers
-// char **(*fetchSelectedPeers)(void *info) - obtain list of selected peers
 void BRPeerManagerSetCallbacks(BRPeerManager *manager, void *info,
                                void (*syncStarted)(void *info),
                                void (*syncStopped)(void *info, int error),
@@ -113,6 +112,10 @@ void BRPeerManagerPublishTx(BRPeerManager *manager, BRTransaction *tx, void *inf
 
 // number of connected peers that have relayed the given unconfirmed transaction
 size_t BRPeerManagerRelayCount(BRPeerManager *manager, UInt256 txHash);
+
+// enable or disable dual-peer parallel sync (enabled by default)
+// when enabled, two download peers are used simultaneously for faster initial sync
+void BRPeerManagerSetParallelSyncEnabled(BRPeerManager *manager, int enabled);
 
 // frees memory allocated for manager (call BRPeerManagerDisconnect() first if connected)
 void BRPeerManagerFree(BRPeerManager *manager);
