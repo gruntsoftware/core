@@ -56,6 +56,14 @@ static const char *BRTestNetDNSSeeds[] = {
 
 // blockchain checkpoints - these are also used as starting points for partial chain downloads, so they must be at
 // difficulty transition boundaries in order to verify the block difficulty at the immediately following transition
+// BRCheckPoint description
+// height == Litecoin blockheight
+// hash == Litecoin transaction hash
+// timestamp == Unix timestamp
+// target == Bits
+//
+// To verify use curl https://api.blockcypher.com/v1/ltc/main/blocks/#hash
+
 static const BRCheckPoint BRMainNetCheckpoints[] = {
     {       0, uint256("12a765e31ffd4059bada1e25190f6e98c99d9714d334efa41a195a7e7e04bfe2"), 1317972665, 0x1e0ffff0 },
     {   20160, uint256("633036c8df655531c2449b2d09b264cc0b49d945a89be23fd3c1a97361ca198c"), 1319798300, 0x1d055262 },
