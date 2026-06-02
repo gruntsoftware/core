@@ -56,6 +56,14 @@ static const char *BRTestNetDNSSeeds[] = {
 
 // blockchain checkpoints - these are also used as starting points for partial chain downloads, so they must be at
 // difficulty transition boundaries in order to verify the block difficulty at the immediately following transition
+// BRCheckPoint description
+// height == Litecoin blockheight
+// hash == Litecoin transaction hash
+// timestamp == Unix timestamp
+// target == Bits
+//
+// To verify use curl https://api.blockcypher.com/v1/ltc/main/blocks/#hash
+
 static const BRCheckPoint BRMainNetCheckpoints[] = {
     {       0, uint256("12a765e31ffd4059bada1e25190f6e98c99d9714d334efa41a195a7e7e04bfe2"), 1317972665, 0x1e0ffff0 },
     {   20160, uint256("633036c8df655531c2449b2d09b264cc0b49d945a89be23fd3c1a97361ca198c"), 1319798300, 0x1d055262 },
@@ -84,7 +92,12 @@ static const BRCheckPoint BRMainNetCheckpoints[] = {
     { 1058400, uint256("76ce37c66d449a4ffbfc35674cf932da701066a001dc223754f9250dd2bdbc62"), 1473296285, 0x1b013ca7 },
     { 1260000, uint256("85a22b528d805bf7a641d1d7c6d96ef5054beda3dcab6be7b83f2e3df24b33a8"), 1502976600, 0x1a25a0d3 },
     { 1411200, uint256("92c85b76f3d4bffca76b23717e4eb1b667c77c96fd52d4dd5dd843bbee64cd73"), 1524838967, 0x1a0203a7 },
-	{ 2036160, uint256("97ab7a0bf3cd7d694c1b369090aea9449e93f92763808de2a073cc8ab0657292"), 1618643881, 0x1a01ab48 }
+	{ 1632960, uint256("8e9313981432a4f352cef82dc45cc9f914588dd84529a57944ead9f1062d165e"), 1558020155, 0x1a015f03 },
+    { 1814400, uint256("e6869446f389dede0fffb15c56903bf9f1428b22708af8812d486fdba9fd745b"), 1585544448, 0x1a03638f },
+    { 2036160, uint256("97ab7a0bf3cd7d694c1b369090aea9449e93f92763808de2a073cc8ab0657292"), 1618643881, 0x1a01ab48 },
+	{ 2237760, uint256("976df9ca4a1ff4671c81768e186619da25d9ecc8a93c1d3344e64a966b71a789"), 1648791852, 0x1a0110f6 },
+    { 2419200, uint256("6a4f7acc6be7b59a1814c1ce29820f2775c8ca8270ba03cde25867cf433aecfe"), 1675905681, 0x1a00b518 },
+	{ 2620800, uint256("f6612cd3992216f53a915d92030f1fd25f1ff20915db250fbb7b4ff7ac519b2f"), 1706095690, 0x1a008b1e }
 };
 
 static const BRCheckPoint BRTestNetCheckpoints[] = {
