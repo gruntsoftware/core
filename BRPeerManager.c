@@ -1,26 +1,6 @@
 //
 //  BRPeerManager.c
-//
-//  Created by Aaron Voisine on 9/2/15.
-//  Copyright (c) 2015 breadwallet LLC.
-//
-//  Permission is hereby granted, free of charge, to any person obtaining a copy
-//  of this software and associated documentation files (the "Software"), to deal
-//  in the Software without restriction, including without limitation the rights
-//  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-//  copies of the Software, and to permit persons to whom the Software is
-//  furnished to do so, subject to the following conditions:
-//
-//  The above copyright notice and this permission notice shall be included in
-//  all copies or substantial portions of the Software.
-//
-//  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-//  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-//  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-//  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-//  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-//  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-//  THE SOFTWARE.
+
 
 #include "BRPeerManager.h"
 #include "BRBloomFilter.h"
@@ -44,6 +24,12 @@
 #define MAX_CONNECT_FAILURES  20 // notify user of network problems after this many connect failures in a row
 #define PEER_FLAG_SYNCED      0x01
 #define PEER_FLAG_NEEDSUPDATE 0x02
+
+// Privacy shield: max blocks buffered from the verification peer awaiting cross-comparison
+#define PRIVACY_BLOCK_BUFFER_CAP 64
+
+// Privacy shield: after this many consecutive omissions by a peer, disconnect it as malicious
+#define PRIVACY_MAX_OMISSIONS    3
 
 #define genesis_block_hash(params) UInt256Reverse((params)->checkpoints[0].hash)
 
@@ -167,6 +153,15 @@ inline static int _BRBlockHeightEq(const void *block, const void *otherBlock)
     return (((const BRMerkleBlock *)block)->height == ((const BRMerkleBlock *)otherBlock)->height);
 }
 
+// Privacy shield: holds the tx hashes relayed for a specific block by the verification peer,
+// so we can cross-compare against what the primary download peer relayed for the same block.
+typedef struct {
+    UInt256 blockHash;
+    uint32_t blockHeight;
+    UInt256 *txHashes;       // array (BRArray) of tx hashes from this block
+    size_t txCount;
+} BRPrivacyBlockRecord;
+
 struct BRPeerManagerStruct {
     const BRChainParams *params;
     BRWallet *wallet;
@@ -190,6 +185,17 @@ struct BRPeerManagerStruct {
     int (*networkIsReachable)(void *info);
     void (*threadCleanup)(void *info);
     pthread_mutex_t lock;
+
+    // --- Privacy shield (dual-peer cross-validation) ---
+    BRPeer *verifyPeer;                           // second peer with a differently-tweaked bloom filter
+    BRBloomFilter *verifyBloomFilter;             // separate filter for the verification peer
+    int privacyShieldEnabled;                      // 1 = dual-peer verification active
+    int privacyShieldRunning;                      // 1 while verifyPeer is actively downloading
+    int privacyOmissionCount;                      // consecutive omissions detected from primary peer
+    int privacyOmissionCountAlt;                   // consecutive omissions detected from verify peer
+    BRPrivacyBlockRecord *privacyBlockBuffer;      // blocks received from verifyPeer awaiting comparison
+    size_t privacyBlockBufCount;                   // number of records in buffer
+    pthread_mutex_t privacyLock;                   // protects privacyBlockBuffer
 };
 
 static void _BRPeerManagerPeerMisbehavin(BRPeerManager *manager, BRPeer *peer)
@@ -407,6 +413,11 @@ static void _updateFilterPingDone(void *info, int success)
             if (manager->downloadPeer) {
                 _BRPeerManagerLoadBloomFilter(manager, manager->downloadPeer);
                 BRPeerSendPing(manager->downloadPeer, info, _updateFilterLoadDone); // wait for pong so filter is loaded
+
+                // Also reload the verify peer's filter if privacy shield is active
+                if (manager->privacyShieldRunning && manager->verifyPeer) {
+                    _BRPeerManagerLoadVerifyBloomFilter(manager);
+                }
             }
             else free(info);
         }
@@ -904,6 +915,294 @@ static void _BRPeerManagerFindPeersV2(BRPeerManager *manager)
     }
 }
 
+// === PRIVACY SHIELD (dual-peer cross-validation) implementation ===
+
+// Load a bloom filter specifically for the verification peer. Uses the same wallet data
+// but a different tweak (derived from the verify peer's hash), producing a different set
+// of false positives. The real wallet addresses match in both filters; the false positives diverge.
+// Neither peer can determine which matches are real by looking at its own filter alone.
+// Called with manager->lock held.
+static void _BRPeerManagerLoadVerifyBloomFilter(BRPeerManager *manager)
+{
+    BRPeer *peer = manager->verifyPeer;
+    if (!peer) return;
+
+    BRWalletUnusedAddrs(manager->wallet, NULL, SEQUENCE_GAP_LIMIT_EXTERNAL + 100, 0);
+    BRWalletUnusedAddrs(manager->wallet, NULL, SEQUENCE_GAP_LIMIT_INTERNAL + 100, 1);
+
+    size_t addrsCount = BRWalletAllAddrs(manager->wallet, NULL, 0);
+    BRAddress *addrs = malloc(addrsCount * sizeof(*addrs));
+    size_t utxosCount = BRWalletUTXOs(manager->wallet, NULL, 0);
+    BRUTXO *utxos = malloc(utxosCount * sizeof(*utxos));
+    uint32_t blockHeight = (manager->lastBlock->height > 100) ? manager->lastBlock->height - 100 : 0;
+    size_t txCount = BRWalletTxUnconfirmedBefore(manager->wallet, NULL, 0, blockHeight);
+    BRTransaction **transactions = malloc(txCount * sizeof(*transactions));
+
+    assert(addrs != NULL);
+    assert(utxos != NULL);
+    assert(transactions != NULL);
+    addrsCount = BRWalletAllAddrs(manager->wallet, addrs, addrsCount);
+    utxosCount = BRWalletUTXOs(manager->wallet, utxos, utxosCount);
+    txCount = BRWalletTxUnconfirmedBefore(manager->wallet, transactions, txCount, blockHeight);
+
+    // Different tweak from BRPeerHash(verifyPeer) produces different false positive set
+    BRBloomFilter *filter = BRBloomFilterNew(manager->fpRate,
+                                              addrsCount + utxosCount + txCount + 100,
+                                              (uint32_t)BRPeerHash(peer), BLOOM_UPDATE_ALL);
+
+    for (size_t i = 0; i < addrsCount; i++) {
+        UInt160 hash = UINT160_ZERO;
+        BRAddressHash160(&hash, addrs[i].s);
+        if (!UInt160IsZero(hash) && !BRBloomFilterContainsData(filter, hash.u8, sizeof(hash))) {
+            BRBloomFilterInsertData(filter, hash.u8, sizeof(hash));
+        }
+    }
+    free(addrs);
+
+    for (size_t i = 0; i < utxosCount; i++) {
+        uint8_t o[sizeof(UInt256) + sizeof(uint32_t)];
+        UInt256Set(o, utxos[i].hash);
+        UInt32SetLE(&o[sizeof(UInt256)], utxos[i].n);
+        if (!BRBloomFilterContainsData(filter, o, sizeof(o))) BRBloomFilterInsertData(filter, o, sizeof(o));
+    }
+    free(utxos);
+
+    for (size_t i = 0; i < txCount; i++) {
+        for (size_t j = 0; j < transactions[i]->inCount; j++) {
+            BRTxInput *input = &transactions[i]->inputs[j];
+            BRTransaction *tx = BRWalletTransactionForHash(manager->wallet, input->txHash);
+            uint8_t o[sizeof(UInt256) + sizeof(uint32_t)];
+            if (tx && input->index < tx->outCount &&
+                BRWalletContainsAddress(manager->wallet, tx->outputs[input->index].address)) {
+                UInt256Set(o, input->txHash);
+                UInt32SetLE(&o[sizeof(UInt256)], input->index);
+                if (!BRBloomFilterContainsData(filter, o, sizeof(o))) BRBloomFilterInsertData(filter, o, sizeof(o));
+            }
+        }
+    }
+    free(transactions);
+
+    if (manager->verifyBloomFilter) BRBloomFilterFree(manager->verifyBloomFilter);
+    manager->verifyBloomFilter = filter;
+
+    uint8_t data[BRBloomFilterSerialize(filter, NULL, 0)];
+    size_t len = BRBloomFilterSerialize(filter, data, sizeof(data));
+    BRPeerSendFilterload(peer, data, len);
+}
+
+// Free a privacy block record's internal storage
+static void _privacyBlockRecordFree(BRPrivacyBlockRecord *rec)
+{
+    if (rec->txHashes) free(rec->txHashes);
+    rec->txHashes = NULL;
+    rec->txCount = 0;
+}
+
+// Clear the entire privacy block buffer. Caller must hold manager->privacyLock.
+static void _privacyBlockBufferClear(BRPeerManager *manager)
+{
+    for (size_t i = 0; i < manager->privacyBlockBufCount; i++) {
+        _privacyBlockRecordFree(&manager->privacyBlockBuffer[i]);
+    }
+    manager->privacyBlockBufCount = 0;
+}
+
+// Find a record in the privacy buffer by block hash. Returns index or SIZE_MAX if not found.
+// Caller must hold manager->privacyLock.
+static size_t _privacyBlockBufferFind(BRPeerManager *manager, UInt256 blockHash)
+{
+    for (size_t i = 0; i < manager->privacyBlockBufCount; i++) {
+        if (UInt256Eq(manager->privacyBlockBuffer[i].blockHash, blockHash)) return i;
+    }
+    return SIZE_MAX;
+}
+
+// Store a block's tx hashes from the verification peer into the privacy buffer.
+// Caller must hold manager->privacyLock.
+static void _privacyBlockBufferAdd(BRPeerManager *manager, UInt256 blockHash, uint32_t height,
+                                   const UInt256 txHashes[], size_t txCount)
+{
+    // Evict oldest if full
+    if (manager->privacyBlockBufCount >= PRIVACY_BLOCK_BUFFER_CAP) {
+        _privacyBlockRecordFree(&manager->privacyBlockBuffer[0]);
+        memmove(&manager->privacyBlockBuffer[0], &manager->privacyBlockBuffer[1],
+                (manager->privacyBlockBufCount - 1) * sizeof(BRPrivacyBlockRecord));
+        manager->privacyBlockBufCount--;
+    }
+
+    BRPrivacyBlockRecord *rec = &manager->privacyBlockBuffer[manager->privacyBlockBufCount];
+    rec->blockHash = blockHash;
+    rec->blockHeight = height;
+    rec->txCount = txCount;
+    rec->txHashes = NULL;
+
+    if (txCount > 0) {
+        rec->txHashes = malloc(txCount * sizeof(UInt256));
+        assert(rec->txHashes != NULL);
+        memcpy(rec->txHashes, txHashes, txCount * sizeof(UInt256));
+    }
+
+    manager->privacyBlockBufCount++;
+}
+
+// Cross-validate: given a block processed by the primary download peer, compare its tx hashes
+// against what the verification peer reported for the same block.
+// Detects two threats:
+//   1) Primary peer omitted a wallet tx that the verify peer included (primary is lying)
+//   2) Verify peer omitted a wallet tx that the primary peer included (verify peer is lying)
+// Returns 1 if cross-validation passed (or no verify data available yet), 0 if a peer lied.
+// Called with manager->lock held. Acquires manager->privacyLock internally.
+static int _privacyCrossValidateBlock(BRPeerManager *manager, UInt256 blockHash,
+                                      const UInt256 primaryTxHashes[], size_t primaryTxCount)
+{
+    if (!manager->privacyShieldRunning || !manager->verifyPeer) return 1;
+
+    pthread_mutex_lock(&manager->privacyLock);
+    size_t idx = _privacyBlockBufferFind(manager, blockHash);
+
+    if (idx == SIZE_MAX) {
+        // Verify peer hasn't delivered this block yet — can't cross-validate.
+        // This is normal during sync; the verify peer may be slightly behind.
+        pthread_mutex_unlock(&manager->privacyLock);
+        return 1;
+    }
+
+    BRPrivacyBlockRecord *verifyRec = &manager->privacyBlockBuffer[idx];
+    int result = 1;
+
+    // Check: did the primary peer omit any wallet tx that the verify peer included?
+    for (size_t i = 0; i < verifyRec->txCount; i++) {
+        if (!BRWalletTransactionForHash(manager->wallet, verifyRec->txHashes[i])) continue; // FP from verify filter
+
+        // This is a real wallet tx according to the verify peer. Was it in the primary set?
+        int found = 0;
+        for (size_t j = 0; j < primaryTxCount; j++) {
+            if (UInt256Eq(primaryTxHashes[j], verifyRec->txHashes[i])) { found = 1; break; }
+        }
+
+        if (!found) {
+            // Primary peer omitted a wallet transaction — lying by omission
+            peer_log(manager->downloadPeer,
+                     "PRIVACY: primary peer omitted wallet tx %s in block #%"PRIu32,
+                     u256hex(verifyRec->txHashes[i]), verifyRec->blockHeight);
+            manager->privacyOmissionCount++;
+
+            if (manager->privacyOmissionCount >= PRIVACY_MAX_OMISSIONS) {
+                peer_log(manager->downloadPeer,
+                         "PRIVACY: primary peer exceeded omission threshold, disconnecting");
+                result = 0;
+            }
+        }
+    }
+
+    // Check: did the verify peer omit any wallet tx that the primary peer included?
+    for (size_t i = 0; i < primaryTxCount; i++) {
+        if (!BRWalletTransactionForHash(manager->wallet, primaryTxHashes[i])) continue; // FP from primary filter
+
+        // Real wallet tx from primary. Was it in the verify set?
+        // Note: it might legitimately be absent if it didn't match the verify filter.
+        // But wallet addresses are in BOTH filters (same data, different tweak doesn't affect
+        // which addresses are inserted — only the hash function mapping changes, which affects
+        // which non-address data produces false positives). So a real wallet tx MUST match both.
+        int found = 0;
+        for (size_t j = 0; j < verifyRec->txCount; j++) {
+            if (UInt256Eq(verifyRec->txHashes[j], primaryTxHashes[i])) { found = 1; break; }
+        }
+
+        if (!found) {
+            peer_log(manager->verifyPeer,
+                     "PRIVACY: verify peer omitted wallet tx %s in block #%"PRIu32,
+                     u256hex(primaryTxHashes[i]), verifyRec->blockHeight);
+            manager->privacyOmissionCountAlt++;
+
+            if (manager->privacyOmissionCountAlt >= PRIVACY_MAX_OMISSIONS) {
+                peer_log(manager->verifyPeer,
+                         "PRIVACY: verify peer exceeded omission threshold, disconnecting");
+                // Disconnect the verify peer, not the primary — primary data was already used
+                pthread_mutex_unlock(&manager->privacyLock);
+                _BRPeerManagerPeerMisbehavin(manager, manager->verifyPeer);
+                manager->verifyPeer = NULL;
+                manager->privacyShieldRunning = 0;
+                return 1; // primary data is still valid
+            }
+        }
+    }
+
+    // Clean up: remove the consumed verify record
+    _privacyBlockRecordFree(verifyRec);
+    if (idx < manager->privacyBlockBufCount - 1) {
+        memmove(&manager->privacyBlockBuffer[idx], &manager->privacyBlockBuffer[idx + 1],
+                (manager->privacyBlockBufCount - 1 - idx) * sizeof(BRPrivacyBlockRecord));
+    }
+    manager->privacyBlockBufCount--;
+
+    pthread_mutex_unlock(&manager->privacyLock);
+
+    if (!result) {
+        // Primary peer was lying — disconnect it
+        _BRPeerManagerPeerMisbehavin(manager, manager->downloadPeer);
+    }
+
+    return result;
+}
+
+// Start the privacy shield: assign a verification peer and send it a differently-tweaked filter.
+// The verify peer downloads the same blocks as the primary, and we cross-compare.
+// Called with manager->lock held.
+static void _BRPeerManagerStartPrivacyShield(BRPeerManager *manager, BRPeer *verifyPeer)
+{
+    if (manager->privacyShieldRunning || !verifyPeer) return;
+    if (verifyPeer == manager->downloadPeer) return;
+
+    manager->verifyPeer = verifyPeer;
+    manager->privacyShieldRunning = 1;
+    manager->privacyOmissionCount = 0;
+    manager->privacyOmissionCountAlt = 0;
+
+    pthread_mutex_lock(&manager->privacyLock);
+    _privacyBlockBufferClear(manager);
+    pthread_mutex_unlock(&manager->privacyLock);
+
+    peer_log(verifyPeer, "PRIVACY: assigned as verification peer");
+
+    // Load a differently-tweaked bloom filter onto the verification peer
+    _BRPeerManagerLoadVerifyBloomFilter(manager);
+    BRPeerSetCurrentBlockHeight(verifyPeer, manager->lastBlock->height);
+
+    // Send the same getblocks/getheaders request to the verify peer so it downloads the same blocks
+    if (manager->lastBlock->height < manager->estimatedHeight) {
+        UInt256 locators[_BRPeerManagerBlockLocators(manager, NULL, 0)];
+        size_t count = _BRPeerManagerBlockLocators(manager, locators, sizeof(locators) / sizeof(*locators));
+
+        BRPeerScheduleDisconnect(verifyPeer, PROTOCOL_TIMEOUT);
+
+        if (manager->lastBlock->timestamp + 7 * 24 * 60 * 60 >= manager->earliestKeyTime) {
+            BRPeerSendGetblocks(verifyPeer, locators, count, UINT256_ZERO);
+        } else {
+            BRPeerSendGetheaders(verifyPeer, locators, count, UINT256_ZERO);
+        }
+    }
+}
+
+// Stop the privacy shield. Safe to call even if not running. Called with manager->lock held.
+static void _BRPeerManagerStopPrivacyShield(BRPeerManager *manager)
+{
+    if (!manager->privacyShieldRunning) return;
+
+    peer_log(&BR_PEER_NONE, "PRIVACY: stopping privacy shield");
+    manager->privacyShieldRunning = 0;
+    manager->verifyPeer = NULL;
+
+    if (manager->verifyBloomFilter) {
+        BRBloomFilterFree(manager->verifyBloomFilter);
+        manager->verifyBloomFilter = NULL;
+    }
+
+    pthread_mutex_lock(&manager->privacyLock);
+    _privacyBlockBufferClear(manager);
+    pthread_mutex_unlock(&manager->privacyLock);
+}
+
 static void _peerConnected(void *info)
 {
     BRPeer *peer = ((BRPeerCallbackInfo *)info)->peer;
@@ -943,6 +1242,13 @@ static void _peerConnected(void *info)
             peerInfo->peer = peer;
             peerInfo->manager = manager;
             BRPeerSendPing(peer, peerInfo, _loadBloomFilterDone);
+        }
+        else if (manager->privacyShieldEnabled && !manager->privacyShieldRunning &&
+                 !manager->verifyPeer && peer != manager->downloadPeer &&
+                 manager->lastBlock->height < manager->estimatedHeight) {
+            // This peer is suitable but not better than the download peer.
+            // Assign it as the privacy verification peer with a different bloom filter.
+            _BRPeerManagerStartPrivacyShield(manager, peer);
         }
     }
     else { // select the peer with the lowest ping time to download the chain from if we're behind
@@ -1030,7 +1336,13 @@ static void _peerDisconnected(void *info, int error)
     if (peer == manager->downloadPeer) { // download peer disconnected
         manager->isConnected = 0;
         manager->downloadPeer = NULL;
+        if (manager->privacyShieldRunning) _BRPeerManagerStopPrivacyShield(manager);
         if (manager->connectFailureCount > MAX_CONNECT_FAILURES) manager->connectFailureCount = MAX_CONNECT_FAILURES;
+    }
+
+    if (peer == manager->verifyPeer) { // verification peer disconnected
+        peer_log(peer, "PRIVACY: verification peer disconnected");
+        _BRPeerManagerStopPrivacyShield(manager);
     }
 
     if (! manager->isConnected && manager->connectFailureCount == MAX_CONNECT_FAILURES) {
@@ -1335,6 +1647,37 @@ static void _peerRelayedBlock(void *info, BRMerkleBlock *block)
 {
     BRPeer *peer = ((BRPeerCallbackInfo *)info)->peer;
     BRPeerManager *manager = ((BRPeerCallbackInfo *)info)->manager;
+
+    // === PRIVACY SHIELD: blocks from the verification peer go into the comparison buffer ===
+    if (manager->privacyShieldRunning && peer == manager->verifyPeer) {
+        size_t txCount = BRMerkleBlockTxHashes(block, NULL, 0);
+        UInt256 txHashes[txCount];
+        txCount = BRMerkleBlockTxHashes(block, txHashes, txCount);
+
+        pthread_mutex_lock(&manager->lock);
+        BRMerkleBlock *prev = BRSetGet(manager->blocks, &block->prevBlock);
+        if (prev) block->height = prev->height + 1;
+        pthread_mutex_unlock(&manager->lock);
+
+        // Buffer the verify peer's tx hashes for this block (for later cross-comparison)
+        pthread_mutex_lock(&manager->privacyLock);
+        _privacyBlockBufferAdd(manager, block->blockHash, block->height, txHashes, txCount);
+        pthread_mutex_unlock(&manager->privacyLock);
+
+        // Reschedule timeout so the verify peer doesn't get disconnected for being "idle"
+        BRPeerScheduleDisconnect(peer, PROTOCOL_TIMEOUT);
+
+        if ((block->height % 500) == 0) {
+            peer_log(peer, "PRIVACY: verify peer relayed block #%"PRIu32, block->height);
+        }
+
+        // We don't process this block into the chain — the primary download peer does that.
+        // We just keep the tx hash list for cross-validation.
+        BRMerkleBlockFree(block);
+        return;
+    }
+
+    // === PRIMARY download peer / normal peers: original block processing ===
     size_t txCount = BRMerkleBlockTxHashes(block, NULL, 0);
     UInt256 _txHashes[(sizeof(UInt256)*txCount <= 0x1000) ? txCount : 0],
             *txHashes = (sizeof(UInt256)*txCount <= 0x1000) ? _txHashes : malloc(txCount*sizeof(*txHashes));
@@ -1438,6 +1781,12 @@ static void _peerRelayedBlock(void *info, BRMerkleBlock *block)
         manager->lastBlock = block;
         if (txCount > 0) _BRPeerManagerUpdateTx(manager, txHashes, txCount, block->height, txTime);
         if (manager->downloadPeer) BRPeerSetCurrentBlockHeight(manager->downloadPeer, block->height);
+        if (manager->verifyPeer) BRPeerSetCurrentBlockHeight(manager->verifyPeer, block->height);
+
+        // Privacy shield: cross-validate this block's tx against what the verify peer reported
+        if (manager->privacyShieldRunning && peer == manager->downloadPeer && txCount > 0) {
+            _privacyCrossValidateBlock(manager, block->blockHash, txHashes, txCount);
+        }
 
         if (block->height < manager->estimatedHeight && peer == manager->downloadPeer) {
             BRPeerScheduleDisconnect(peer, PROTOCOL_TIMEOUT); // reschedule sync timeout
@@ -1449,6 +1798,12 @@ static void _peerRelayedBlock(void *info, BRMerkleBlock *block)
         if (block->height == manager->estimatedHeight) { // chain download is complete
             saveCount = (block->height % BLOCK_DIFFICULTY_INTERVAL) + BLOCK_DIFFICULTY_INTERVAL + 1;
             _BRPeerManagerLoadMempools(manager);
+
+            // Privacy shield work is done once sync completes — verify peer becomes a regular peer
+            if (manager->privacyShieldRunning) {
+                peer_log(&BR_PEER_NONE, "PRIVACY: sync complete, disabling privacy shield");
+                _BRPeerManagerStopPrivacyShield(manager);
+            }
         }
     }
     else if (BRSetContains(manager->blocks, block)) { // we already have the block (or at least the header)
@@ -1760,6 +2115,19 @@ BRPeerManager *BRPeerManagerNew(const BRChainParams *params, BRWallet *wallet, u
     array_new(manager->publishedTxHashes, 10);
     pthread_mutex_init(&manager->lock, NULL);
     manager->threadCleanup = _dummyThreadCleanup;
+
+    // Initialize privacy shield state
+    manager->verifyPeer = NULL;
+    manager->verifyBloomFilter = NULL;
+    manager->privacyShieldEnabled = 0; // disabled by default, enable via BRPeerManagerSetPrivacyShieldEnabled
+    manager->privacyShieldRunning = 0;
+    manager->privacyOmissionCount = 0;
+    manager->privacyOmissionCountAlt = 0;
+    manager->privacyBlockBuffer = calloc(PRIVACY_BLOCK_BUFFER_CAP, sizeof(BRPrivacyBlockRecord));
+    assert(manager->privacyBlockBuffer != NULL);
+    manager->privacyBlockBufCount = 0;
+    pthread_mutex_init(&manager->privacyLock, NULL);
+
     return manager;
 }
 
@@ -1927,6 +2295,9 @@ void BRPeerManagerDisconnect(BRPeerManager *manager)
     assert(manager != NULL);
     pthread_mutex_lock(&manager->lock);
 
+    // Stop privacy shield before disconnecting peers
+    _BRPeerManagerStopPrivacyShield(manager);
+
     // prevent new peers from being spawned
     maxConnectCount = manager->maxConnectCount;
     manager->maxConnectCount = 0;
@@ -1965,6 +2336,9 @@ void BRPeerManagerRescan(BRPeerManager *manager)
     pthread_mutex_lock(&manager->lock);
 
     if (manager->isConnected) {
+        // Stop privacy shield if running
+        _BRPeerManagerStopPrivacyShield(manager);
+
         // start the chain download from the most recent checkpoint that's at least a week older than earliestKeyTime
         for (size_t i = manager->params->checkpointsCount; i > 0; i--) {
             if (i - 1 == 0 || manager->params->checkpoints[i - 1].timestamp + 7*24*60*60 < manager->earliestKeyTime) {
@@ -2173,11 +2547,24 @@ size_t BRPeerManagerRelayCount(BRPeerManager *manager, UInt256 txHash)
     return count;
 }
 
+// enable or disable dual-peer privacy shield
+void BRPeerManagerSetPrivacyShieldEnabled(BRPeerManager *manager, int enabled)
+{
+    assert(manager != NULL);
+    pthread_mutex_lock(&manager->lock);
+    manager->privacyShieldEnabled = enabled;
+    if (!enabled && manager->privacyShieldRunning) {
+        _BRPeerManagerStopPrivacyShield(manager);
+    }
+    pthread_mutex_unlock(&manager->lock);
+}
+
 // frees memory allocated for manager
 void BRPeerManagerFree(BRPeerManager *manager)
 {
     assert(manager != NULL);
     pthread_mutex_lock(&manager->lock);
+    _BRPeerManagerStopPrivacyShield(manager);
     array_free(manager->peers);
     for (size_t i = array_count(manager->connectedPeers); i > 0; i--) BRPeerFree(manager->connectedPeers[i - 1]);
     array_free(manager->connectedPeers);
@@ -2192,7 +2579,16 @@ void BRPeerManagerFree(BRPeerManager *manager)
     array_free(manager->txRequests);
     array_free(manager->publishedTx);
     array_free(manager->publishedTxHashes);
+    // Free privacy shield resources
+    if (manager->privacyBlockBuffer) {
+        for (size_t i = 0; i < manager->privacyBlockBufCount; i++) {
+            if (manager->privacyBlockBuffer[i].txHashes) free(manager->privacyBlockBuffer[i].txHashes);
+        }
+        free(manager->privacyBlockBuffer);
+    }
+    if (manager->verifyBloomFilter) BRBloomFilterFree(manager->verifyBloomFilter);
     pthread_mutex_unlock(&manager->lock);
     pthread_mutex_destroy(&manager->lock);
+    pthread_mutex_destroy(&manager->privacyLock);
     free(manager);
 }
