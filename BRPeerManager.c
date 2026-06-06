@@ -397,6 +397,83 @@ static void _updateFilterLoadDone(void *info, int success)
     }
 }
 
+
+// === PRIVACY SHIELD (dual-peer cross-validation) implementation ===
+
+// Load a bloom filter specifically for the verification peer. Uses the same wallet data
+// but a different tweak (derived from the verify peer's hash), producing a different set
+// of false positives. The real wallet addresses match in both filters; the false positives diverge.
+// Neither peer can determine which matches are real by looking at its own filter alone.
+// Called with manager->lock held.
+static void _BRPeerManagerLoadVerifyBloomFilter(BRPeerManager *manager)
+{
+    BRPeer *peer = manager->verifyPeer;
+    if (!peer) return;
+
+    BRWalletUnusedAddrs(manager->wallet, NULL, SEQUENCE_GAP_LIMIT_EXTERNAL + 100, 0);
+    BRWalletUnusedAddrs(manager->wallet, NULL, SEQUENCE_GAP_LIMIT_INTERNAL + 100, 1);
+
+    size_t addrsCount = BRWalletAllAddrs(manager->wallet, NULL, 0);
+    BRAddress *addrs = malloc(addrsCount * sizeof(*addrs));
+    size_t utxosCount = BRWalletUTXOs(manager->wallet, NULL, 0);
+    BRUTXO *utxos = malloc(utxosCount * sizeof(*utxos));
+    uint32_t blockHeight = (manager->lastBlock->height > 100) ? manager->lastBlock->height - 100 : 0;
+    size_t txCount = BRWalletTxUnconfirmedBefore(manager->wallet, NULL, 0, blockHeight);
+    BRTransaction **transactions = malloc(txCount * sizeof(*transactions));
+
+    assert(addrs != NULL);
+    assert(utxos != NULL);
+    assert(transactions != NULL);
+    addrsCount = BRWalletAllAddrs(manager->wallet, addrs, addrsCount);
+    utxosCount = BRWalletUTXOs(manager->wallet, utxos, utxosCount);
+    txCount = BRWalletTxUnconfirmedBefore(manager->wallet, transactions, txCount, blockHeight);
+
+    // Different tweak from BRPeerHash(verifyPeer) produces different false positive set
+    BRBloomFilter *filter = BRBloomFilterNew(manager->fpRate,
+                                              addrsCount + utxosCount + txCount + 100,
+                                              (uint32_t)BRPeerHash(peer), BLOOM_UPDATE_ALL);
+
+    for (size_t i = 0; i < addrsCount; i++) {
+        UInt160 hash = UINT160_ZERO;
+        BRAddressHash160(&hash, addrs[i].s);
+        if (!UInt160IsZero(hash) && !BRBloomFilterContainsData(filter, hash.u8, sizeof(hash))) {
+            BRBloomFilterInsertData(filter, hash.u8, sizeof(hash));
+        }
+    }
+    free(addrs);
+
+    for (size_t i = 0; i < utxosCount; i++) {
+        uint8_t o[sizeof(UInt256) + sizeof(uint32_t)];
+        UInt256Set(o, utxos[i].hash);
+        UInt32SetLE(&o[sizeof(UInt256)], utxos[i].n);
+        if (!BRBloomFilterContainsData(filter, o, sizeof(o))) BRBloomFilterInsertData(filter, o, sizeof(o));
+    }
+    free(utxos);
+
+    for (size_t i = 0; i < txCount; i++) {
+        for (size_t j = 0; j < transactions[i]->inCount; j++) {
+            BRTxInput *input = &transactions[i]->inputs[j];
+            BRTransaction *tx = BRWalletTransactionForHash(manager->wallet, input->txHash);
+            uint8_t o[sizeof(UInt256) + sizeof(uint32_t)];
+            if (tx && input->index < tx->outCount &&
+                BRWalletContainsAddress(manager->wallet, tx->outputs[input->index].address)) {
+                UInt256Set(o, input->txHash);
+                UInt32SetLE(&o[sizeof(UInt256)], input->index);
+                if (!BRBloomFilterContainsData(filter, o, sizeof(o))) BRBloomFilterInsertData(filter, o, sizeof(o));
+            }
+        }
+    }
+    free(transactions);
+
+    if (manager->verifyBloomFilter) BRBloomFilterFree(manager->verifyBloomFilter);
+    manager->verifyBloomFilter = filter;
+
+    uint8_t data[BRBloomFilterSerialize(filter, NULL, 0)];
+    size_t len = BRBloomFilterSerialize(filter, data, sizeof(data));
+    BRPeerSendFilterload(peer, data, len);
+}
+
+
 static void _updateFilterPingDone(void *info, int success)
 {
     BRPeer *peer = ((BRPeerCallbackInfo *)info)->peer;
@@ -913,81 +990,6 @@ static void _BRPeerManagerFindPeersV2(BRPeerManager *manager)
             peer_log(&BR_PEER_NONE, "Added hardcoded peer: %s", hardcodedIPs[i]);
         }
     }
-}
-
-// === PRIVACY SHIELD (dual-peer cross-validation) implementation ===
-
-// Load a bloom filter specifically for the verification peer. Uses the same wallet data
-// but a different tweak (derived from the verify peer's hash), producing a different set
-// of false positives. The real wallet addresses match in both filters; the false positives diverge.
-// Neither peer can determine which matches are real by looking at its own filter alone.
-// Called with manager->lock held.
-static void _BRPeerManagerLoadVerifyBloomFilter(BRPeerManager *manager)
-{
-    BRPeer *peer = manager->verifyPeer;
-    if (!peer) return;
-
-    BRWalletUnusedAddrs(manager->wallet, NULL, SEQUENCE_GAP_LIMIT_EXTERNAL + 100, 0);
-    BRWalletUnusedAddrs(manager->wallet, NULL, SEQUENCE_GAP_LIMIT_INTERNAL + 100, 1);
-
-    size_t addrsCount = BRWalletAllAddrs(manager->wallet, NULL, 0);
-    BRAddress *addrs = malloc(addrsCount * sizeof(*addrs));
-    size_t utxosCount = BRWalletUTXOs(manager->wallet, NULL, 0);
-    BRUTXO *utxos = malloc(utxosCount * sizeof(*utxos));
-    uint32_t blockHeight = (manager->lastBlock->height > 100) ? manager->lastBlock->height - 100 : 0;
-    size_t txCount = BRWalletTxUnconfirmedBefore(manager->wallet, NULL, 0, blockHeight);
-    BRTransaction **transactions = malloc(txCount * sizeof(*transactions));
-
-    assert(addrs != NULL);
-    assert(utxos != NULL);
-    assert(transactions != NULL);
-    addrsCount = BRWalletAllAddrs(manager->wallet, addrs, addrsCount);
-    utxosCount = BRWalletUTXOs(manager->wallet, utxos, utxosCount);
-    txCount = BRWalletTxUnconfirmedBefore(manager->wallet, transactions, txCount, blockHeight);
-
-    // Different tweak from BRPeerHash(verifyPeer) produces different false positive set
-    BRBloomFilter *filter = BRBloomFilterNew(manager->fpRate,
-                                              addrsCount + utxosCount + txCount + 100,
-                                              (uint32_t)BRPeerHash(peer), BLOOM_UPDATE_ALL);
-
-    for (size_t i = 0; i < addrsCount; i++) {
-        UInt160 hash = UINT160_ZERO;
-        BRAddressHash160(&hash, addrs[i].s);
-        if (!UInt160IsZero(hash) && !BRBloomFilterContainsData(filter, hash.u8, sizeof(hash))) {
-            BRBloomFilterInsertData(filter, hash.u8, sizeof(hash));
-        }
-    }
-    free(addrs);
-
-    for (size_t i = 0; i < utxosCount; i++) {
-        uint8_t o[sizeof(UInt256) + sizeof(uint32_t)];
-        UInt256Set(o, utxos[i].hash);
-        UInt32SetLE(&o[sizeof(UInt256)], utxos[i].n);
-        if (!BRBloomFilterContainsData(filter, o, sizeof(o))) BRBloomFilterInsertData(filter, o, sizeof(o));
-    }
-    free(utxos);
-
-    for (size_t i = 0; i < txCount; i++) {
-        for (size_t j = 0; j < transactions[i]->inCount; j++) {
-            BRTxInput *input = &transactions[i]->inputs[j];
-            BRTransaction *tx = BRWalletTransactionForHash(manager->wallet, input->txHash);
-            uint8_t o[sizeof(UInt256) + sizeof(uint32_t)];
-            if (tx && input->index < tx->outCount &&
-                BRWalletContainsAddress(manager->wallet, tx->outputs[input->index].address)) {
-                UInt256Set(o, input->txHash);
-                UInt32SetLE(&o[sizeof(UInt256)], input->index);
-                if (!BRBloomFilterContainsData(filter, o, sizeof(o))) BRBloomFilterInsertData(filter, o, sizeof(o));
-            }
-        }
-    }
-    free(transactions);
-
-    if (manager->verifyBloomFilter) BRBloomFilterFree(manager->verifyBloomFilter);
-    manager->verifyBloomFilter = filter;
-
-    uint8_t data[BRBloomFilterSerialize(filter, NULL, 0)];
-    size_t len = BRBloomFilterSerialize(filter, data, sizeof(data));
-    BRPeerSendFilterload(peer, data, len);
 }
 
 // Free a privacy block record's internal storage
