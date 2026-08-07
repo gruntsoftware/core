@@ -1790,31 +1790,6 @@ int BRTransactionTests()
         r = 0, fprintf(stderr, "\n***FAILED*** %s: BRTransactionCopy() test 3", __func__);
     BRTransactionFree(tgt);
     BRTransactionFree(src);
-    
-    BRTransaction *src = BRTransactionNew ();
-    BRTransactionAddInput(src, inHash, 0, 1, script, scriptLen, NULL, 0, TXIN_SEQUENCE);
-    BRTransactionAddInput(src, inHash, 0, 1, script, scriptLen, NULL, 0, TXIN_SEQUENCE);
-    BRTransactionAddOutput(src, 1000000, script, scriptLen);
-    BRTransactionAddOutput(src, 1000000, script, scriptLen);
-    BRTransactionAddOutput(src, 1000000, script, scriptLen);
-
-    BRTransaction *tgt = BRTransactionCopy(src);
-    if (!BRTransactionEqual(tgt, src))
-        r = 0, fprintf(stderr, "\n***FAILED*** %s: BRTransactionCopy() test 1", __func__);
-
-    tgt->blockHeight++;
-    if (BRTransactionEqual(tgt, src)) // fail if equal
-        r = 0, fprintf(stderr, "\n***FAILED*** %s: BRTransactionCopy() test 2", __func__);
-
-    BRTransactionFree(tgt);
-    BRTransactionFree(src);
-
-    src = BRTransactionParse(buf4, len4);
-    tgt = BRTransactionCopy(src);
-    if (!BRTransactionEqual(tgt, src))
-        r = 0, fprintf(stderr, "\n***FAILED*** %s: BRTransactionCopy() test 3", __func__);
-    BRTransactionFree(tgt);
-    BRTransactionFree(src);
 
     if (! r) fprintf(stderr, "\n                                    ");
     return r;
@@ -2678,7 +2653,7 @@ int BRRunTests()
     return (fail == 0);
 }
 
-#ifndef BITCOIN_TEST_NO_MAIN
+#if !BITCOIN_TEST_NO_MAIN
 void syncStarted(void *info)
 {
     printf("sync started\n");
