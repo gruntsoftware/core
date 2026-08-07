@@ -82,7 +82,9 @@ Brainwallet Core is released under the [MIT License](LICENSE), inherited from th
 
 ## About
 
-Brainwallet Core is a fork of [breadwallet-core](https://github.com/breadwallet/breadwallet-core), originally written by [Aaron Voisine](https://github.com/voisine) ([@voisine](https://github.com/voisine)) — co-founder of breadwallet (now [BRD](https://brd.com)) and one of the earliest contributors to Bitcoin Core itself. Aaron's original SPV wallet-core design is the foundation this library builds on, retargeted here from Bitcoin to Litecoin and extended with features like the dual-peer privacy shield. Aaron continues to serve as an advisor to Grunt Software / Brainwallet.
+Brainwallet Core is a fork of [breadwallet-core](https://github.com/breadwallet/breadwallet-core), originally written by [Aaron Voisine](https://github.com/voisine) ([@voisine](https://github.com/voisine)) — co-founder of [BRD](https://brd.com) (formerly Breadwallet) and creator of the open-source SPV wallet code that now powers millions of users across BRD, Litewallet, and Brainwallet. Aaron's original wallet-core design is the foundation this library builds on, retargeted here from Bitcoin to Litecoin and extended with features like the dual-peer privacy shield.
+
+In June 2026, Aaron joined Brainwallet as an investor and advisor — see the [press release](<https://www.brainwallet.co/pressreleases/aaron-voisine-co-founder-of-brd-(formerly-breadwallet)-joins-brainwallet-as-investor-and-advisor>) for details.
 
 ---
 
