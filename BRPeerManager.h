@@ -35,6 +35,12 @@ void BRPeerManagerSetCallbacks(BRPeerManager *manager, void *info,
                                int (*networkIsReachable)(void *info),
                                void (*threadCleanup)(void *info));
 
+// optional: called when the manager detects and recovers from unexpected internal state (e.g. a missing
+// checkpoint block) instead of crashing, so the app can report it to its own crash/analytics tooling.
+// info is the same info pointer passed to BRPeerManagerSetCallbacks(); warning is a short, static,
+// human-readable string with no dynamic/sensitive content, safe to log as-is.
+void BRPeerManagerSetIntegrityWarningCallback(BRPeerManager *manager, void (*integrityWarning)(void *info, const char *warning));
+
 void BRPeerManagerSetFixedPeer(BRPeerManager *manager, UInt128 address, uint16_t port);
 BRPeerStatus BRPeerManagerConnectStatus(BRPeerManager *manager);
 uint16_t BRPeerManagerStandardPort(BRPeerManager *manager);
