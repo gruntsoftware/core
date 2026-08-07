@@ -184,6 +184,7 @@ struct BRPeerManagerStruct {
     void (*savePeers)(void *info, int replace, const BRPeer peers[], size_t peersCount);
     int (*networkIsReachable)(void *info);
     void (*threadCleanup)(void *info);
+    void (*integrityWarning)(void *info, const char *warning); // optional, see BRPeerManagerSetIntegrityWarningCallback()
     pthread_mutex_t lock;
 
     // --- Privacy shield (dual-peer cross-validation) ---
@@ -2164,6 +2165,20 @@ void BRPeerManagerSetCallbacks(BRPeerManager *manager, void *info,
     manager->threadCleanup = (threadCleanup) ? threadCleanup : _dummyThreadCleanup;
 }
 
+// optional: see declaration in BRPeerManager.h
+void BRPeerManagerSetIntegrityWarningCallback(BRPeerManager *manager, void (*integrityWarning)(void *info, const char *warning))
+{
+    assert(manager != NULL);
+    manager->integrityWarning = integrityWarning;
+}
+
+// calls manager->integrityWarning (if set) with a short, static, human-readable message. Never call this
+// while manager->lock is held, to stay consistent with how every other callback in this file is invoked.
+static void _BRPeerManagerNotifyIntegrityWarning(BRPeerManager *manager, const char *warning)
+{
+    if (manager->integrityWarning) manager->integrityWarning(manager->info, warning);
+}
+
 // specifies a single fixed peer to use when connecting to the bitcoin network
 // set address to UINT128_ZERO to revert to default behavior
 void BRPeerManagerSetFixedPeer(BRPeerManager *manager, UInt128 address, uint16_t port)
@@ -2334,6 +2349,8 @@ void BRPeerManagerDisconnect(BRPeerManager *manager)
 // possibility that a malicious node might lie by omitting transactions that match the bloom filter)
 void BRPeerManagerRescan(BRPeerManager *manager)
 {
+    int checkpointMissing = 0;
+
     assert(manager != NULL);
     pthread_mutex_lock(&manager->lock);
 
@@ -2345,8 +2362,12 @@ void BRPeerManagerRescan(BRPeerManager *manager)
         for (size_t i = manager->params->checkpointsCount; i > 0; i--) {
             if (i - 1 == 0 || manager->params->checkpoints[i - 1].timestamp + 7*24*60*60 < manager->earliestKeyTime) {
                 UInt256 hash = UInt256Reverse(manager->params->checkpoints[i - 1].hash);
+                BRMerkleBlock *checkpointBlock = BRSetGet(manager->blocks, &hash);
 
-                manager->lastBlock = BRSetGet(manager->blocks, &hash);
+                // guard against a checkpoint missing from the block set (e.g. a params/persisted-block
+                // mismatch) leaving lastBlock NULL and crashing every subsequent accessor
+                if (checkpointBlock) manager->lastBlock = checkpointBlock;
+                else checkpointMissing = 1;
                 break;
             }
         }
@@ -2361,6 +2382,10 @@ void BRPeerManagerRescan(BRPeerManager *manager)
 
         manager->syncStartHeight = 0; // a syncStartHeight of 0 indicates that syncing hasn't started yet
         pthread_mutex_unlock(&manager->lock);
+        if (checkpointMissing) {
+            _BRPeerManagerNotifyIntegrityWarning(manager, "BRPeerManagerRescan: checkpoint block missing from "
+                                                  "block set, lastBlock left unchanged");
+        }
         BRPeerManagerConnect(manager);
     }
     else pthread_mutex_unlock(&manager->lock);
@@ -2370,12 +2395,18 @@ void BRPeerManagerRescan(BRPeerManager *manager)
 uint32_t BRPeerManagerEstimatedBlockHeight(BRPeerManager *manager)
 {
     uint32_t height;
+    int lastBlockMissing;
 
     assert(manager != NULL);
     pthread_mutex_lock(&manager->lock);
-    height = (manager->lastBlock->height < manager->estimatedHeight) ? manager->estimatedHeight :
+    // lastBlock should always be non-NULL past construction, but guard against it anyway since this
+    // is reachable from arbitrary JNI/background threads and shouldn't crash the process on a bug elsewhere
+    lastBlockMissing = (manager->lastBlock == NULL);
+    height = (lastBlockMissing) ? manager->estimatedHeight :
+             (manager->lastBlock->height < manager->estimatedHeight) ? manager->estimatedHeight :
              manager->lastBlock->height;
     pthread_mutex_unlock(&manager->lock);
+    if (lastBlockMissing) _BRPeerManagerNotifyIntegrityWarning(manager, "BRPeerManagerEstimatedBlockHeight: lastBlock is NULL");
     return height;
 }
 
@@ -2383,11 +2414,14 @@ uint32_t BRPeerManagerEstimatedBlockHeight(BRPeerManager *manager)
 uint32_t BRPeerManagerLastBlockHeight(BRPeerManager *manager)
 {
     uint32_t height;
+    int lastBlockMissing;
 
     assert(manager != NULL);
     pthread_mutex_lock(&manager->lock);
-    height = manager->lastBlock->height;
+    lastBlockMissing = (manager->lastBlock == NULL);
+    height = (lastBlockMissing) ? 0 : manager->lastBlock->height;
     pthread_mutex_unlock(&manager->lock);
+    if (lastBlockMissing) _BRPeerManagerNotifyIntegrityWarning(manager, "BRPeerManagerLastBlockHeight: lastBlock is NULL");
     return height;
 }
 
@@ -2395,11 +2429,14 @@ uint32_t BRPeerManagerLastBlockHeight(BRPeerManager *manager)
 uint32_t BRPeerManagerLastBlockTimestamp(BRPeerManager *manager)
 {
     uint32_t timestamp;
+    int lastBlockMissing;
 
     assert(manager != NULL);
     pthread_mutex_lock(&manager->lock);
-    timestamp = manager->lastBlock->timestamp;
+    lastBlockMissing = (manager->lastBlock == NULL);
+    timestamp = (lastBlockMissing) ? 0 : manager->lastBlock->timestamp;
     pthread_mutex_unlock(&manager->lock);
+    if (lastBlockMissing) _BRPeerManagerNotifyIntegrityWarning(manager, "BRPeerManagerLastBlockTimestamp: lastBlock is NULL");
     return timestamp;
 }
 
@@ -2408,12 +2445,17 @@ uint32_t BRPeerManagerLastBlockTimestamp(BRPeerManager *manager)
 double BRPeerManagerSyncProgress(BRPeerManager *manager, uint32_t startHeight)
 {
     double progress;
+    int lastBlockMissing;
 
     assert(manager != NULL);
     pthread_mutex_lock(&manager->lock);
     if (startHeight == 0) startHeight = manager->syncStartHeight;
+    lastBlockMissing = (manager->lastBlock == NULL);
 
-    if (! manager->downloadPeer && manager->syncStartHeight == 0) {
+    if (lastBlockMissing) { // guard: lastBlock should always be set past construction, but don't crash if not
+        progress = 0.0;
+    }
+    else if (! manager->downloadPeer && manager->syncStartHeight == 0) {
         progress = 0.0;
     }
     else if (! manager->downloadPeer || manager->lastBlock->height < manager->estimatedHeight) {
@@ -2425,6 +2467,7 @@ double BRPeerManagerSyncProgress(BRPeerManager *manager, uint32_t startHeight)
     else progress = 1.0;
 
     pthread_mutex_unlock(&manager->lock);
+    if (lastBlockMissing) _BRPeerManagerNotifyIntegrityWarning(manager, "BRPeerManagerSyncProgress: lastBlock is NULL");
     return progress;
 }
 
