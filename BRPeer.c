@@ -914,14 +914,30 @@ static int _BRPeerOpenSocket(BRPeer *peer, int domain, double timeout, int *erro
     return r;
 }
 
+static void _dummyThreadCleanup(void *info); // forward decl; defined below, also used by BRPeerNew/BRPeerSetCallbacks
+
 static void *_peerThreadRoutine(void *arg)
 {
     BRPeer *peer = arg;
     BRPeerContext *ctx = arg;
     int socket, error = 0;
 
+    // Defensive guard (Crashlytics issue 9f86d0dd9962b0efc34252c4c41b2659): ctx->threadCleanup
+    // should always be set by BRPeerNew() or BRPeerSetCallbacks(), unlike every other optional
+    // callback in this function (ctx->disconnected, ctx->mempoolCallback below), which are all
+    // null-checked before being invoked, pthread_cleanup_pop() at the end of this function calls
+    // ctx->threadCleanup unconditionally. If it's ever unexpectedly NULL -- e.g. a BRPeerContext
+    // reaching this thread's first instruction before its constructor-set default has become
+    // visible across threads, or any other lifetime/initialization bug -- that's a call through a
+    // null function pointer: EXC_BAD_ACCESS at address 0x0, attributed to this frame since there's
+    // no callee frame for address 0. That's exactly this crash's signature.
+    if (! ctx->threadCleanup) {
+        peer_log(peer, "threadCleanup unexpectedly NULL, falling back to no-op");
+        ctx->threadCleanup = _dummyThreadCleanup;
+    }
+
     pthread_cleanup_push(ctx->threadCleanup, ctx->info);
-    
+
     if (_BRPeerOpenSocket(peer, PF_INET6, CONNECT_TIMEOUT, &error)) {
         struct timeval tv;
         double time = 0, msgTimeout;
