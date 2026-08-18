@@ -153,70 +153,88 @@ inline static UInt256 UInt256Reverse(UInt256 u)
     (_hexu((s)[56]) << 4) | _hexu((s)[57]), (_hexu((s)[58]) << 4) | _hexu((s)[59]),\
     (_hexu((s)[60]) << 4) | _hexu((s)[61]), (_hexu((s)[62]) << 4) | _hexu((s)[63]) } })
 
+// Same conversion as uint256(), but expands to a bare `{ .u8 = {...} }` initializer list instead of a
+// `(UInt256) {...}` compound literal, so it can be nested as a member's sub-initializer inside another
+// object's static initializer (e.g. BRChainParams.h's checkpoint tables) without violating ISO C's rule
+// that a compound literal is not a constant expression - GCC only tolerates that as a GNU extension when
+// the compound literal is itself the entire initializer of the static object, not when nested inside one.
+// A plain brace-enclosed sub-initializer for an aggregate member has no such restriction.
+#define uint256_init(s) { .u8 = {\
+    (_hexu((s)[ 0]) << 4) | _hexu((s)[ 1]), (_hexu((s)[ 2]) << 4) | _hexu((s)[ 3]),\
+    (_hexu((s)[ 4]) << 4) | _hexu((s)[ 5]), (_hexu((s)[ 6]) << 4) | _hexu((s)[ 7]),\
+    (_hexu((s)[ 8]) << 4) | _hexu((s)[ 9]), (_hexu((s)[10]) << 4) | _hexu((s)[11]),\
+    (_hexu((s)[12]) << 4) | _hexu((s)[13]), (_hexu((s)[14]) << 4) | _hexu((s)[15]),\
+    (_hexu((s)[16]) << 4) | _hexu((s)[17]), (_hexu((s)[18]) << 4) | _hexu((s)[19]),\
+    (_hexu((s)[20]) << 4) | _hexu((s)[21]), (_hexu((s)[22]) << 4) | _hexu((s)[23]),\
+    (_hexu((s)[24]) << 4) | _hexu((s)[25]), (_hexu((s)[26]) << 4) | _hexu((s)[27]),\
+    (_hexu((s)[28]) << 4) | _hexu((s)[29]), (_hexu((s)[30]) << 4) | _hexu((s)[31]),\
+    (_hexu((s)[32]) << 4) | _hexu((s)[33]), (_hexu((s)[34]) << 4) | _hexu((s)[35]),\
+    (_hexu((s)[36]) << 4) | _hexu((s)[37]), (_hexu((s)[38]) << 4) | _hexu((s)[39]),\
+    (_hexu((s)[40]) << 4) | _hexu((s)[41]), (_hexu((s)[42]) << 4) | _hexu((s)[43]),\
+    (_hexu((s)[44]) << 4) | _hexu((s)[45]), (_hexu((s)[46]) << 4) | _hexu((s)[47]),\
+    (_hexu((s)[48]) << 4) | _hexu((s)[49]), (_hexu((s)[50]) << 4) | _hexu((s)[51]),\
+    (_hexu((s)[52]) << 4) | _hexu((s)[53]), (_hexu((s)[54]) << 4) | _hexu((s)[55]),\
+    (_hexu((s)[56]) << 4) | _hexu((s)[57]), (_hexu((s)[58]) << 4) | _hexu((s)[59]),\
+    (_hexu((s)[60]) << 4) | _hexu((s)[61]), (_hexu((s)[62]) << 4) | _hexu((s)[63]) } }
+
 #define _hexc(u) (((u) & 0x0f) + ((((u) & 0x0f) <= 9) ? '0' : 'a' - 0x0a))
 #define _hexu(c) (((c) >= '0' && (c) <= '9') ? (c) - '0' : ((c) >= 'a' && (c) <= 'f') ? (c) - ('a' - 0x0a) :\
                   ((c) >= 'A' && (c) <= 'F') ? (c) - ('A' - 0x0a) : -1)
 
 // unaligned memory access helpers
 
+// Each of these used to write through '*(union _uN { uint8_t u8[N]; } *)ptr = (union _uN){...}' - assigning a
+// whole compound-literal object of one type through a pointer cast to another. That's a real strict-aliasing
+// violation (not just a style nit - see the equivalent BRMurmur3_32() fix in BRCrypto.c and its commit message
+// for a from-source-verified example of GCC actually miscompiling around this exact pattern at -O2: the write
+// silently failed to take effect at all). Writing byte-by-byte through a uint8_t* is always alias-safe per C's
+// character-type exemption, matches how every UIntNGetBE/LE() below already reads, and produces identical bytes.
+
 inline static void UInt16SetBE(void *b2, uint16_t u)
 {
-    *(union _u16 { uint8_t u8[16/8]; } *)b2 = (union _u16) { (u >> 8) & 0xff, u & 0xff };
+    ((uint8_t *)b2)[0] = (u >> 8) & 0xff, ((uint8_t *)b2)[1] = u & 0xff;
 }
 
 inline static void UInt16SetLE(void *b2, uint16_t u)
 {
-    *(union _u16 { uint8_t u8[16/8]; } *)b2 = (union _u16) { u & 0xff, (u >> 8) & 0xff };
+    ((uint8_t *)b2)[0] = u & 0xff, ((uint8_t *)b2)[1] = (u >> 8) & 0xff;
 }
 
 inline static void UInt32SetBE(void *b4, uint32_t u)
 {
-    *(union _u32 { uint8_t u8[32/8]; } *)b4 =
-        (union _u32) { (u >> 24) & 0xff, (u >> 16) & 0xff, (u >> 8) & 0xff, u & 0xff };
+    ((uint8_t *)b4)[0] = (u >> 24) & 0xff, ((uint8_t *)b4)[1] = (u >> 16) & 0xff;
+    ((uint8_t *)b4)[2] = (u >> 8) & 0xff,  ((uint8_t *)b4)[3] = u & 0xff;
 }
 
 inline static void UInt32SetLE(void *b4, uint32_t u)
 {
-    *(union _u32 { uint8_t u8[32/8]; } *)b4 =
-        (union _u32) { u & 0xff, (u >> 8) & 0xff, (u >> 16) & 0xff, (u >> 24) & 0xff };
+    ((uint8_t *)b4)[0] = u & 0xff,         ((uint8_t *)b4)[1] = (u >> 8) & 0xff;
+    ((uint8_t *)b4)[2] = (u >> 16) & 0xff, ((uint8_t *)b4)[3] = (u >> 24) & 0xff;
 }
 
 inline static void UInt64SetBE(void *b8, uint64_t u)
 {
-    *(union _u64 { uint8_t u8[64/8]; } *)b8 =
-        (union _u64) { (u >> 56) & 0xff, (u >> 48) & 0xff, (u >> 40) & 0xff, (u >> 32) & 0xff,
-                       (u >> 24) & 0xff, (u >> 16) & 0xff, (u >> 8) & 0xff, u & 0xff };
+    for (int i = 0; i < 8; i++) ((uint8_t *)b8)[i] = (u >> (8*(7 - i))) & 0xff;
 }
 
 inline static void UInt64SetLE(void *b8, uint64_t u)
 {
-    *(union _u64 { uint8_t u8[64/8]; } *)b8 =
-        (union _u64) { u & 0xff, (u >> 8) & 0xff, (u >> 16) & 0xff, (u >> 24) & 0xff,
-                       (u >> 32) & 0xff, (u >> 40) & 0xff, (u >> 48) & 0xff, (u >> 56) & 0xff };
+    for (int i = 0; i < 8; i++) ((uint8_t *)b8)[i] = (u >> (8*i)) & 0xff;
 }
 
 inline static void UInt128Set(void *b16, UInt128 u)
 {
-    *(union _u128 { uint8_t u8[128/8]; } *)b16 =
-        (union _u128) { u.u8[0], u.u8[1], u.u8[2],  u.u8[3],  u.u8[4],  u.u8[5],  u.u8[6],  u.u8[7],
-                        u.u8[8], u.u8[9], u.u8[10], u.u8[11], u.u8[12], u.u8[13], u.u8[14], u.u8[15] };
+    for (int i = 0; i < 16; i++) ((uint8_t *)b16)[i] = u.u8[i];
 }
 
 inline static void UInt160Set(void *b20, UInt160 u)
 {
-    *(union _u160 { uint8_t u8[160/8]; } *)b20 =
-        (union _u160) { u.u8[0],  u.u8[1],  u.u8[2],  u.u8[3],  u.u8[4],  u.u8[5],  u.u8[6],  u.u8[7],
-                        u.u8[8],  u.u8[9],  u.u8[10], u.u8[11], u.u8[12], u.u8[13], u.u8[14], u.u8[15],
-                        u.u8[16], u.u8[17], u.u8[18], u.u8[19] };
+    for (int i = 0; i < 20; i++) ((uint8_t *)b20)[i] = u.u8[i];
 }
 
 inline static void UInt256Set(void *b32, UInt256 u)
 {
-    *(union _u256 { uint8_t u8[256/8]; } *)b32 =
-        (union _u256) { u.u8[0],  u.u8[1],  u.u8[2],  u.u8[3],  u.u8[4],  u.u8[5],  u.u8[6],  u.u8[7],
-                        u.u8[8],  u.u8[9],  u.u8[10], u.u8[11], u.u8[12], u.u8[13], u.u8[14], u.u8[15],
-                        u.u8[16], u.u8[17], u.u8[18], u.u8[19], u.u8[20], u.u8[21], u.u8[22], u.u8[23],
-                        u.u8[24], u.u8[25], u.u8[26], u.u8[27], u.u8[28], u.u8[29], u.u8[30], u.u8[31] };
+    for (int i = 0; i < 32; i++) ((uint8_t *)b32)[i] = u.u8[i];
 }
 
 inline static uint16_t UInt16GetBE(const void *b2)

@@ -801,12 +801,14 @@ void BRPaymentProtocolPaymentFree(BRPaymentProtocolPayment *payment)
     assert(payment != NULL);
     
     if (payment->merchantData) array_free(payment->merchantData);
+    for (size_t i = 0; i < payment->txCount; i++) BRTransactionFree(payment->transactions[i]);
     if (payment->transactions) array_free(payment->transactions);
     for (size_t i = 0; i < payment->refundToCount; i++) _BRPaymentProtocolOutputFree(payment->refundTo[i]);
     if (payment->refundTo) array_free(payment->refundTo);
     if (payment->memo) array_free(payment->memo);
     if (ctx->defaults) array_free(ctx->defaults);
     if (ctx->unknown) array_free(ctx->unknown);
+    free(payment);
 }
 
 // returns a newly allocated ACK struct that must be freed by calling BRPaymentProtocolACKFree()
