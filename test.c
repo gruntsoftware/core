@@ -2093,13 +2093,37 @@ int BRMerkleBlockTests()
         r = 0, fprintf(stderr, "***FAILED*** %s: BRMerkleBlockParse() hash test: got %s, expected %s\n", __func__,
                        u256hex(UInt256Reverse(b->blockHash)), u256hex(expectedBlockHash));
 
-    if (! BRMerkleBlockIsValid(b, (uint32_t)time(NULL)))
-        r = 0, fprintf(stderr, "***FAILED*** %s: BRMerkleBlockParse() valid test: version=%u timestamp=%u "
+    int isValid = BRMerkleBlockIsValid(b, (uint32_t)time(NULL));
+
+    if (! isValid) {
+        // BRMerkleBlockIsValid() itself is a single opaque call from here, so independently recompute each of its
+        // three checks directly from the same struct fields (no calls into BRMerkleBlock.c's private functions)
+        // to pin down which one (if any) actually disagrees on a platform where this fails - every individual
+        // field has otherwise checked out as exactly correct by hand.
+        uint32_t maxsize = 0x1e0fffff >> 24, maxtarget = 0x1e0fffff & 0x00ffffff;
+        uint32_t size = b->target >> 24, tgt = b->target & 0x00ffffff;
+        int merkleRootMatches = (b->totalTx == 0) ||
+                                 (b->hashesCount >= 1 && b->hashes && UInt256Eq(b->hashes[0], b->merkleRoot));
+        int timestampOk = ! (b->timestamp > (uint32_t)time(NULL) + 2*60*60);
+        int targetRangeOk = ! (tgt == 0 || (tgt & 0x00800000) || size > maxsize ||
+                               (size == maxsize && tgt > maxtarget));
+        UInt256 t = UINT256_ZERO;
+        if (size > 3) UInt32SetLE(&t.u8[size - 3], tgt); else UInt32SetLE(t.u8, tgt >> (3 - size)*8);
+        int powOk = 1;
+        for (int i = 31; i >= 0; i--) {
+            if (b->powHash.u8[i] < t.u8[i]) break;
+            if (b->powHash.u8[i] > t.u8[i]) { powOk = 0; break; }
+        }
+        r = 0;
+        fprintf(stderr, "***FAILED*** %s: BRMerkleBlockParse() valid test: version=%u timestamp=%u "
                        "target=%08x nonce=%u totalTx=%u merkleRoot=%s powHash=%s hashesCount=%zu flagsLen=%zu "
-                       "hashes[0]=%s flags[0]=%02x\n", __func__, b->version, b->timestamp, b->target, b->nonce,
-                       b->totalTx, u256hex(UInt256Reverse(b->merkleRoot)), u256hex(UInt256Reverse(b->powHash)),
+                       "hashes[0]=%s flags[0]=%02x | independently recomputed: merkleRootMatches=%d "
+                       "timestampOk=%d targetRangeOk=%d powOk=%d\n", __func__, b->version, b->timestamp, b->target,
+                       b->nonce, b->totalTx, u256hex(UInt256Reverse(b->merkleRoot)), u256hex(UInt256Reverse(b->powHash)),
                        b->hashesCount, b->flagsLen, (b->hashesCount > 0 && b->hashes) ? u256hex(b->hashes[0]) : "(none)",
-                       (b->flagsLen > 0 && b->flags) ? b->flags[0] : 0);
+                       (b->flagsLen > 0 && b->flags) ? b->flags[0] : 0, merkleRootMatches, timestampOk, targetRangeOk,
+                       powOk);
+    }
 
     size_t serLen = BRMerkleBlockSerialize(b, block2, sizeof(block2));
 
