@@ -834,11 +834,6 @@ static void _BRPeerManagerFindPeersV2(BRPeerManager *manager)
 {
     uint64_t services = SERVICES_NODE_NETWORK | SERVICES_NODE_BLOOM | manager->params->services;
     time_t now = time(NULL);
-    struct timespec ts;
-    pthread_t thread;
-    pthread_attr_t attr;
-    UInt128 *addr, *addrList;
-    BRFindPeersInfo *info;
 
     //TODO: WIP HERE, get from shared prefs
     // List of hardcoded IP addresses (replace with actual IPs for your network)
