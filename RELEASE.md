@@ -62,9 +62,13 @@ subsequent CI failure it exposed, rather than working around them.
   `cc`/`gcc` is Apple Clang, which never reproduced the strict-aliasing bug above).
 - CI green on both `build-and-test` and `build-asan`.
 - The one change that touches computed wire-format output (`UIntNSetBE`/`UIntNSetLE`) was independently
-  verified against 49 real, on-chain Litecoin transactions spanning genesis (2011) through a recent block,
-  pulled from an independent block explorer — parsed, re-serialized to byte-identical output, and hash-matched
-  against the real network's txids on every one.
+  verified against real, on-chain Litecoin transactions pulled from an independent block explorer — parsed,
+  re-serialized to byte-identical output, and hash-matched against the real network's txids. That verification
+  is now a permanent part of the test suite: `BRRealChainDataTests()` embeds 25 real pre-SegWit-activation
+  transactions (spanning genesis block 1 through block 806400) that are round-tripped end to end, plus 10 real
+  post-activation SegWit transactions used to verify the marker/flag detection that documents this library's
+  known SegWit-unsupported limitation, since `BRTransactionParse`/`BRTransactionSerialize` have no SegWit
+  wire-format support.
 
 ## v10.3.0
 
