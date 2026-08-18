@@ -541,13 +541,19 @@ int BRWalletAddressIsUsed(BRWallet *wallet, const char *addr)
 BRTransaction *BRWalletCreateTransaction(BRWallet *wallet, uint64_t amount, const char *addr)
 {
     BRTxOutput o = BR_TX_OUTPUT_NONE;
-    
+    BRTransaction *tx;
+
     assert(wallet != NULL);
     assert(amount > 0);
     assert(addr != NULL && BRAddressIsValid(addr));
     o.amount = amount;
     BRTxOutputSetAddress(&o, addr);
-    return BRWalletCreateTxForOutputs(wallet, &o, 1);
+    tx = BRWalletCreateTxForOutputs(wallet, &o, 1);
+    // BRWalletCreateTxForOutputs() copies o's script into its own output via BRTransactionAddOutput() rather than
+    // taking ownership of it, so o's own script buffer (allocated by BRTxOutputSetAddress() above) is still ours
+    // to free here
+    BRTxOutputSetScript(&o, NULL, 0);
+    return tx;
 }
 
 // returns an unsigned transaction that sends the specified amount from the wallet to the given address
@@ -576,8 +582,13 @@ BRTransaction *BRWalletCreateOpsTransaction(BRWallet *wallet,
     BRTxOutput outputs[2];
     outputs[0] = opsOutput;
     outputs[1] = mainOutput;
-    
-    return BRWalletCreateTxForOutputs(wallet, outputs, 2);
+
+    BRTransaction *tx = BRWalletCreateTxForOutputs(wallet, outputs, 2);
+    // see the matching comment in BRWalletCreateTransaction() above - mainOutput/opsOutput's own script buffers
+    // are still ours to free, BRWalletCreateTxForOutputs() only copied their bytes into tx's own outputs
+    BRTxOutputSetScript(&mainOutput, NULL, 0);
+    BRTxOutputSetScript(&opsOutput, NULL, 0);
+    return tx;
 }
 
 /// Description:
@@ -1138,12 +1149,15 @@ uint64_t BRWalletFeeForTxAmount(BRWallet *wallet, uint64_t amount)
     o.amount = (amount < maxAmount) ? amount : maxAmount;
     BRTxOutputSetScript(&o, dummyScript, sizeof(dummyScript)); // unspendable dummy scriptPubKey
     tx = BRWalletCreateTxForOutputs(wallet, &o, 1);
+    // see the matching comment in BRWalletCreateTransaction() above - o's own script buffer is still ours to
+    // free, BRWalletCreateTxForOutputs() only copied its bytes into tx's own output
+    BRTxOutputSetScript(&o, NULL, 0);
 
     if (tx) {
         fee = BRWalletFeeForTx(wallet, tx);
         BRTransactionFree(tx);
     }
-    
+
     return fee;
 }
 
