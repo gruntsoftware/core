@@ -574,9 +574,14 @@ uint32_t BRMurmur3_32(const void *data, size_t len, uint32_t seed)
     size_t i, count = len/4;
     
     assert(data != NULL || len == 0);
-    
+
     for (i = 0; i < count; i++) {
-        k = le32(((const uint32_t *)data)[i])*C1;
+        // read each 4 byte little-endian chunk byte-wise rather than casting data to uint32_t* and dereferencing
+        // it: data has no alignment guarantee (callers pass arbitrary hash/address/script buffers), and casting
+        // an arbitrary uint8_t* to uint32_t* and reading through it is both a misaligned access and a strict-
+        // aliasing violation - real, exploitable undefined behavior, not just a style nit
+        const uint8_t *p = (const uint8_t *)data + i*4;
+        k = ((uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24))*C1;
         k = rol32(k, 15)*C2;
         h ^= k;
         h = rol32(h, 13)*5 + 0xe6546b64;
@@ -649,11 +654,14 @@ void BRHMACDRBG(void *out, size_t outLen, void *K, void *V, void (*hash)(void *,
         for (i = 0; i < hashLen; i++) ((uint8_t *)K)[i] = 0x00, ((uint8_t *)V)[i] = 0x01;
     }
     
+    // seed/nonce/ps are NULL (with a 0 length) on "generate more output" calls - memcpy() with a NULL source is
+    // undefined behavior even when the length is 0, so guard each copy rather than relying on len==0 making the
+    // NULL harmless (GCC in particular can miscompile code around a NULL passed to memcpy(), even at length 0)
     memcpy(buf, V, hashLen);
     buf[hashLen] = 0x00;
-    memcpy(&buf[hashLen + 1], seed, seedLen);
-    memcpy(&buf[hashLen + 1 + seedLen], nonce, nonceLen);
-    memcpy(&buf[hashLen + 1 + seedLen + nonceLen], ps, psLen);
+    if (seedLen > 0) memcpy(&buf[hashLen + 1], seed, seedLen);
+    if (nonceLen > 0) memcpy(&buf[hashLen + 1 + seedLen], nonce, nonceLen);
+    if (psLen > 0) memcpy(&buf[hashLen + 1 + seedLen + nonceLen], ps, psLen);
     BRHMAC(K, hash, hashLen, K, hashLen, buf, bufLen); // K = HMAC(K, V || 0x00 || entropy || nonce || ps)
     BRHMAC(V, hash, hashLen, K, hashLen, V, hashLen);  // V = HMAC(K, V)
     
