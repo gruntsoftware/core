@@ -38,11 +38,11 @@ extern "C" {
 #pragma message "testnet build"
 #endif
 
-// bitcoin address prefixes
-#define BITCOIN_PUBKEY_ADDRESS      48
-#define BITCOIN_SCRIPT_ADDRESS      50
-#define BITCOIN_PUBKEY_ADDRESS_TEST 111
-#define BITCOIN_SCRIPT_ADDRESS_TEST 58
+// litecoin address prefixes
+#define LITECOIN_PUBKEY_ADDRESS      48
+#define LITECOIN_SCRIPT_ADDRESS      50
+#define LITECOIN_PUBKEY_ADDRESS_TEST 111
+#define LITECOIN_SCRIPT_ADDRESS_TEST 58
 
 // bitcoin script opcodes: https://en.bitcoin.it/wiki/Script#Constants
 #define OP_0           0x00
