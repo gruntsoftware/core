@@ -205,6 +205,7 @@ int BRSetTests()
 
     if (BRSetCount(s) != 0) r = 0, fprintf(stderr, "***FAILED*** %s: BRSetCount() test 2\n", __func__);
 
+    BRSetFree(s);
     return r;
 }
 
@@ -2372,6 +2373,8 @@ int BRPaymentProtocolTests()
     // check that memo is not NULL
     if (! ack->memo) r = 0, fprintf(stderr, "***FAILED*** %s: BRPaymentProtocolACK->memo test\n", __func__);
 
+    if (ack) BRPaymentProtocolACKFree(ack);
+
     const char buf7[] = "\x12\x0b\x78\x35\x30\x39\x2b\x73\x68\x61\x32\x35\x36\x1a\xbe\x15\x0a\xfe\x0b\x30\x82\x05\xfa"
     "\x30\x82\x04\xe2\xa0\x03\x02\x01\x02\x02\x10\x09\x0b\x35\xca\x5c\x5b\xf1\xb9\x8b\x3d\x8f\x9f\x4a\x77\x55\xd6\x30"
     "\x0d\x06\x09\x2a\x86\x48\x86\xf7\x0d\x01\x01\x0b\x05\x00\x30\x75\x31\x0b\x30\x09\x06\x03\x55\x04\x06\x13\x02\x55"
@@ -2522,6 +2525,8 @@ int BRPaymentProtocolTests()
     len = (req) ? BRPaymentProtocolRequestSerialize(req, buf0, sizeof(buf0)) : 0;
     if (len > 0)
         r = 0, fprintf(stderr, "***FAILED*** %s: BRPaymentProtocolRequestParse/Serialize() test 3\n", __func__);
+
+    if (req) BRPaymentProtocolRequestFree(req);
 
     printf("                                    ");
     return r;
