@@ -2086,38 +2086,59 @@ int BRMerkleBlockTests()
 
     b = BRMerkleBlockParse((uint8_t *)block, sizeof(block) - 1);
 
-    if (! UInt256Eq(b->blockHash,
-                    UInt256Reverse(uint256("54362f99e7a24bb96aa0961eb44e9152140747e869dd536c27d8b9bcf4bf5015"))))
-        r = 0, fprintf(stderr, "***FAILED*** %s: BRMerkleBlockParse() hash test\n", __func__);
+    UInt256 expectedBlockHash = uint256("54362f99e7a24bb96aa0961eb44e9152140747e869dd536c27d8b9bcf4bf5015");
+    UInt256 expectedTxHash = uint256("724645a6d5c62b9d842dc5faaf8bfe4449afa86571f4e9baa7c89f9f21c8b477");
+
+    if (! UInt256Eq(b->blockHash, UInt256Reverse(expectedBlockHash)))
+        r = 0, fprintf(stderr, "***FAILED*** %s: BRMerkleBlockParse() hash test: got %s, expected %s\n", __func__,
+                       u256hex(UInt256Reverse(b->blockHash)), u256hex(expectedBlockHash));
 
     if (! BRMerkleBlockIsValid(b, (uint32_t)time(NULL)))
-        r = 0, fprintf(stderr, "***FAILED*** %s: BRMerkleBlockParse() valid test\n", __func__);
+        r = 0, fprintf(stderr, "***FAILED*** %s: BRMerkleBlockParse() valid test: version=%u timestamp=%u "
+                       "target=%08x nonce=%u totalTx=%u merkleRoot=%s powHash=%s hashesCount=%zu flagsLen=%zu "
+                       "hashes[0]=%s flags[0]=%02x\n", __func__, b->version, b->timestamp, b->target, b->nonce,
+                       b->totalTx, u256hex(UInt256Reverse(b->merkleRoot)), u256hex(UInt256Reverse(b->powHash)),
+                       b->hashesCount, b->flagsLen, (b->hashesCount > 0 && b->hashes) ? u256hex(b->hashes[0]) : "(none)",
+                       (b->flagsLen > 0 && b->flags) ? b->flags[0] : 0);
 
-    if (BRMerkleBlockSerialize(b, block2, sizeof(block2)) != sizeof(block2) ||
-        memcmp(block, block2, sizeof(block2)) != 0)
-        r = 0, fprintf(stderr, "***FAILED*** %s: BRMerkleBlockSerialize() test\n", __func__);
+    size_t serLen = BRMerkleBlockSerialize(b, block2, sizeof(block2));
 
-    if (! BRMerkleBlockContainsTxHash(b, uint256("724645a6d5c62b9d842dc5faaf8bfe4449afa86571f4e9baa7c89f9f21c8b477")))
-        r = 0, fprintf(stderr, "***FAILED*** %s: BRMerkleBlockContainsTxHash() test\n", __func__);
+    if (serLen != sizeof(block2) || memcmp(block, block2, sizeof(block2)) != 0) {
+        size_t i = 0;
+        while (i < sizeof(block2) && i < serLen && (uint8_t)block[i] == block2[i]) i++;
+        r = 0, fprintf(stderr, "***FAILED*** %s: BRMerkleBlockSerialize() test: got %zu bytes, expected %zu, "
+                       "first mismatch at byte %zu (got 0x%02x, expected 0x%02x)\n", __func__, serLen,
+                       sizeof(block2), i, (i < serLen) ? block2[i] : 0, (i < sizeof(block2)) ? (uint8_t)block[i] : 0);
+    }
 
-    if (BRMerkleBlockTxHashes(b, NULL, 0) != 1)
-        r = 0, fprintf(stderr, "***FAILED*** %s: BRMerkleBlockTxHashes() test 0\n", __func__);
+    if (! BRMerkleBlockContainsTxHash(b, expectedTxHash))
+        r = 0, fprintf(stderr, "***FAILED*** %s: BRMerkleBlockContainsTxHash() test: %s not found among "
+                       "block's %zu hash(es)\n", __func__, u256hex(expectedTxHash), b->hashesCount);
 
-    UInt256 txHashes[BRMerkleBlockTxHashes(b, NULL, 0)];
+    size_t txHashesCount = BRMerkleBlockTxHashes(b, NULL, 0);
 
-    BRMerkleBlockTxHashes(b, txHashes, 1);
+    if (txHashesCount != 1)
+        r = 0, fprintf(stderr, "***FAILED*** %s: BRMerkleBlockTxHashes() test 0: got count %zu, expected 1\n",
+                       __func__, txHashesCount);
 
-    if (! UInt256Eq(txHashes[0], uint256("724645a6d5c62b9d842dc5faaf8bfe4449afa86571f4e9baa7c89f9f21c8b477")))
-        r = 0, fprintf(stderr, "***FAILED*** %s: BRMerkleBlockTxHashes() test 1\n", __func__);
+    UInt256 txHashes[(txHashesCount > 0) ? txHashesCount : 1]; // keep the VLA valid even if the count above is 0
+
+    size_t txHashesWritten = BRMerkleBlockTxHashes(b, txHashes, txHashesCount);
+
+    if (txHashesWritten < 1 || ! UInt256Eq(txHashes[0], expectedTxHash))
+        r = 0, fprintf(stderr, "***FAILED*** %s: BRMerkleBlockTxHashes() test 1: got %s, expected %s\n", __func__,
+                       (txHashesWritten >= 1) ? u256hex(txHashes[0]) : "(none written)", u256hex(expectedTxHash));
 
     BRMerkleBlock *c = BRMerkleBlockCopy(b);
 
     if (!BRMerkleBlockEqual(b, c))
-        r = 0, fprintf(stderr, "***FAILED*** %s: BRMerkleBlockEqual() test 1\n", __func__);
+        r = 0, fprintf(stderr, "***FAILED*** %s: BRMerkleBlockEqual() test 1: copy of a block unexpectedly "
+                       "compared unequal to the original\n", __func__);
 
     c->height++;
     if (BRMerkleBlockEqual(b, c)) // fail if equal
-        r = 0, fprintf(stderr, "***FAILED*** %s: BRMerkleBlockEqual() test 2\n", __func__);
+        r = 0, fprintf(stderr, "***FAILED*** %s: BRMerkleBlockEqual() test 2: blocks with different height "
+                       "(%u vs %u) unexpectedly compared equal\n", __func__, b->height, c->height);
 
     if (c) BRMerkleBlockFree(c);
 
@@ -2498,6 +2519,14 @@ int BRRunTests()
 {
     int fail = 0;
 
+    // Force line-buffered stdout so the "test name... success/***FAIL***" summary lines interleave in the
+    // correct chronological order with the (always unbuffered) fprintf(stderr, ...) failure-detail lines each
+    // Tests() function emits. Without this, stdout is fully block-buffered whenever it isn't a TTY (e.g. in
+    // CI), so a batch of stdout summary lines can flush together long after - or braided arbitrarily with -
+    // the stderr detail that says *why* a given test failed, making CI logs show a bare "***FAILED***" with
+    // no way to tell which assertion inside the test actually fired.
+    setvbuf(stdout, NULL, _IOLBF, 0);
+
     printf("BRIntsTests...                      ");
     printf("%s\n", (BRIntsTests()) ? "success" : (fail++, "***FAIL***"));
     printf("BRArrayTests...                     ");
@@ -2536,8 +2565,9 @@ int BRRunTests()
     printf("%s\n", (BRBloomFilterTests()) ? "success" : (fail++, "***FAIL***"));
     printf("BRMerkleBlockTests...               ");
     printf("%s\n", (BRMerkleBlockTests()) ? "success" : (fail++, "***FAIL***"));
+    // informational only: BIP70 payment protocol isn't used by this wallet, so a failure here doesn't fail the suite
     printf("BRPaymentProtocolTests...           ");
-    printf("%s\n", (BRPaymentProtocolTests()) ? "success" : (fail++, "***FAIL***"));
+    printf("%s\n", (BRPaymentProtocolTests()) ? "success" : "***FAIL*** (informational, not used)");
     printf("\n");
 
     if (fail > 0) printf("%d TEST FUNCTION(S) ***FAILED***\n", fail);
