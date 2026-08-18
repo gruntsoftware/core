@@ -94,6 +94,24 @@ For the full, up-to-date changelog see [GitHub Releases](https://github.com/grun
 
 ---
 
+### **v10.4.0**  [PR [#21](https://github.com/gruntsoftware/core/pull/21)/[#22](https://github.com/gruntsoftware/core/pull/22)]
+---
+#### 🔧 Build Fix
+- **`BRChainParams.h` failed to compile under GCC** (`initializer element is not constant`) — GCC only accepts a compound-literal static initializer when it's an object's *entire* initializer, not nested inside the checkpoint tables' larger aggregate initializer. Added `uint256_init()`, a bare brace-list variant with no such restriction.
+
+#### 🇱🇹 Litecoin Correctness
+- The three test failures carried as "known issues" from v10.3.0 (`BRKeyTests`, `BRBIP32SequenceTests`, `BRMerkleBlockTests`) turned out to be leftover Bitcoin-mainnet fixtures from this fork's breadwallet-core origin — Litecoin's code was correctly rejecting them, but the tests never checked the return value. Converted every fixture to genuine Litecoin-derived vectors and re-enabled `BRBIP38KeyTests`, which had been permanently disabled instead of fixed.
+- Renamed `BITCOIN_PUBKEY_ADDRESS`/`BITCOIN_SCRIPT_ADDRESS`/`BITCOIN_PRIVKEY` (+ testnet variants) to `LITECOIN_*` — same values, but the old naming is exactly what made the fixture bugs above easy to introduce and hard to notice for 8 years.
+
+#### 🐛 Real Bug Fixes
+- **Strict-aliasing miscompilation under GCC** in `UIntNSetBE()`/`UIntNSetLE()` (`BRInt.h`) — used throughout wire-format serialization (transactions, blocks, peer protocol). Found by reproducing against real GCC locally; GCC's optimizer was silently dropping a write due to a pointer-cast aliasing violation. Fixed by writing byte-by-byte instead.
+- Two more genuine UB bugs found along the way: a `memcpy()` with a `NULL` source in `BRHMACDRBG()`, and an unaligned/aliasing pointer cast in `BRMurmur3_32()`.
+- Several real memory leaks, including one in `BRWalletCreateTransaction()`/`BRWalletCreateOpsTransaction()`/`BRWalletFeeForTxAmount()` affecting every successful call to the most commonly used function in the wallet API.
+
+**Full Changelog**: https://github.com/gruntsoftware/core/compare/v10.3.0...v10.4.0
+
+---
+
 ### **v10.3.0**  [PR [#17](https://github.com/gruntsoftware/core/pull/17)]
 ---
 #### 🐛 Crash Fix
