@@ -835,6 +835,19 @@ static void _BRPeerManagerFindPeersV2(BRPeerManager *manager)
     uint64_t services = SERVICES_NODE_NETWORK | SERVICES_NODE_BLOOM | manager->params->services;
     time_t now = time(NULL);
 
+    // A user-selected trusted node (BRPeerManagerSetFixedPeer) pins the sync to exactly
+    // that peer: make it the only entry in the peer list and skip hardcoded/DNS discovery,
+    // otherwise BRPeerManagerConnect() picks a random hardcoded peer and the fixed peer is
+    // never actually used. Mirrors the fixedPeer branch in _BRPeerManagerFindPeers().
+    if (! UInt128IsZero(manager->fixedPeer.address)) {
+        array_set_count(manager->peers, 1);
+        manager->peers[0] = manager->fixedPeer;
+        manager->peers[0].services = services;
+        manager->peers[0].timestamp = now;
+        peer_log(&BR_PEER_NONE, "using fixed peer, skipping peer discovery");
+        return;
+    }
+
     //TODO: WIP HERE, get from shared prefs
     // List of hardcoded IP addresses (replace with actual IPs for your network)
     // Ensure these peers are reliable and support SPV mode.
