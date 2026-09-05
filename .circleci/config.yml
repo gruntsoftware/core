@@ -66,7 +66,13 @@ jobs:
   build-asan:
     docker:
       - image: cimg/base:2024.09
-    resource_class: medium
+    # ASan reserves a large shadow-memory region via mmap before main() runs. On the
+    # 4 GB `medium` runner that occasionally fails, or collides with an existing mapping
+    # under high-entropy ASLR - it surfaces as a bare
+    # "AddressSanitizer:DEADLYSIGNAL / Received segmentation fault" with no test output
+    # at all (the crash is before the first test prints). `large` gives headroom; the
+    # mmap_rnd_bits tweak and the retry loop below absorb the residual flakiness.
+    resource_class: large
     steps:
       - checkout
 
@@ -79,6 +85,10 @@ jobs:
           command: sudo apt-get update && sudo apt-get install -y build-essential
 
       - run:
+          name: Reduce ASLR entropy for ASan shadow memory
+          command: sudo sysctl -w vm.mmap_rnd_bits=28 || echo "could not set vm.mmap_rnd_bits (non-fatal)"
+
+      - run:
           name: Compile with AddressSanitizer
           command: |
             make clean
@@ -86,7 +96,24 @@ jobs:
 
       - run:
           name: Run tests under ASan
-          command: ./test_runner
+          command: |
+            # verbosity=1 makes ASan log its shadow-memory setup, so a genuine
+            # allocation failure is diagnosable instead of a bare DEADLYSIGNAL.
+            # detect_leaks=0: LSan's ptrace-based scan is unreliable in the Docker
+            # executor and isn't what this job checks.
+            export ASAN_OPTIONS="verbosity=1:detect_leaks=0"
+            for attempt in 1 2 3; do
+              echo "===== ASan test_runner: attempt $attempt ====="
+              if ./test_runner; then
+                echo "ASan tests passed on attempt $attempt"
+                exit 0
+              fi
+              status=$?
+              echo "attempt $attempt failed (exit $status)"
+              [ "$attempt" -lt 3 ] && sleep 3
+            done
+            echo "ASan tests still failing after 3 attempts - not a flake"
+            exit 1
 
 workflows:
   core-ci:

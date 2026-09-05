@@ -835,6 +835,29 @@ static void _BRPeerManagerFindPeersV2(BRPeerManager *manager)
     uint64_t services = SERVICES_NODE_NETWORK | SERVICES_NODE_BLOOM | manager->params->services;
     time_t now = time(NULL);
 
+    // A user-selected trusted node (BRPeerManagerSetFixedPeer) pins the sync to exactly
+    // that peer: make it the only entry in the peer list and skip hardcoded/DNS discovery,
+    // otherwise BRPeerManagerConnect() picks a random hardcoded peer and the fixed peer is
+    // never actually used. Mirrors the fixedPeer branch in _BRPeerManagerFindPeers().
+    if (! UInt128IsZero(manager->fixedPeer.address)) {
+        array_set_count(manager->peers, 1);
+        manager->peers[0] = manager->fixedPeer;
+        manager->peers[0].services = services;
+        manager->peers[0].timestamp = now;
+        // Syncing through a single trusted node: use the looser trusted bloom filter
+        // false-positive rate so that node can't tell which addresses are actually ours.
+        // The adaptive fpRate tightening in _peerRelayedBlock() is skipped while a fixed
+        // peer is set, so this rate holds for the whole fixed-peer sync.
+        manager->fpRate = BLOOM_TRUSTED_FALSEPOSITIVE_RATE;
+        peer_log(&BR_PEER_NONE, "using fixed peer, skipping peer discovery (fpRate %f)", manager->fpRate);
+        return;
+    }
+
+    // Not in fixed-peer mode: this is a mainnet V2 discovery for a (re)started sync, so
+    // reset the bloom filter false-positive rate to the default. From here _peerRelayedBlock()
+    // adapts it downward as blocks arrive, as before.
+    manager->fpRate = BLOOM_DEFAULT_FALSEPOSITIVE_RATE;
+
     //TODO: WIP HERE, get from shared prefs
     // List of hardcoded IP addresses (replace with actual IPs for your network)
     // Ensure these peers are reliable and support SPV mode.
@@ -1694,7 +1717,10 @@ static void _peerRelayedBlock(void *info, BRMerkleBlock *block)
     }
 
     // track the observed bloom filter false positive rate using a low pass filter to smooth out variance
-    if (peer == manager->downloadPeer && block->totalTx > 0) {
+    // (skipped in fixed-peer mode: there the rate is deliberately pinned to
+    // BLOOM_TRUSTED_FALSEPOSITIVE_RATE in _BRPeerManagerFindPeersV2() and must not be adapted
+    // down or trip the "too high, disconnecting" sanity check below)
+    if (peer == manager->downloadPeer && block->totalTx > 0 && UInt128IsZero(manager->fixedPeer.address)) {
         for (i = 0; i < txCount; i++) { // wallet tx are not false-positives
             if (! BRWalletTransactionForHash(manager->wallet, txHashes[i])) fpCount++;
         }

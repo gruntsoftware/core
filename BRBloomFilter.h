@@ -34,6 +34,9 @@ extern "C" {
 
 // bloom filters are explained in BIP37: https://github.com/bitcoin/bips/blob/master/bip-0037.mediawiki
 
+// used when syncing through a single user-selected trusted node (BRPeerManagerSetFixedPeer):
+// a deliberately loose rate so the trusted node can't tell which addresses are actually ours
+#define BLOOM_TRUSTED_FALSEPOSITIVE_RATE 0.1 // use 0.00005 for less data, 0.001 for good anonymity
 #define BLOOM_DEFAULT_FALSEPOSITIVE_RATE 0.001 // use 0.00005 for less data, 0.001 for good anonymity
 #define BLOOM_REDUCED_FALSEPOSITIVE_RATE 0.0005
 #define BLOOM_UPDATE_NONE                0
