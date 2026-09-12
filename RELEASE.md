@@ -2,6 +2,55 @@
 
 All notable changes to `gruntsoftware/core` are documented in this file, newest first.
 
+## v10.4.1
+
+**Branch:** `release/v10.4.1` &middot; **Merged from:** `main` (PR [#25](https://github.com/gruntsoftware/core/pull/25))
+
+Fixes the trusted-node ("fixed peer") sync path introduced in v10.4.0: setting a trusted node had no effect on
+sync, and once that was fixed, tunes the bloom filter and connection behavior for that mode.
+
+### Fixed
+
+- **`BRPeerManagerSetFixedPeer()` was ignored by `_BRPeerManagerFindPeersV2()`** — the newer V2 peer-discovery
+  path never checked whether a fixed peer was configured, so `BRPeerManagerConnect()` picked a random
+  hardcoded/DNS peer regardless of a user-selected trusted node. `_BRPeerManagerFindPeers()` (the original path)
+  already handled this correctly; `_BRPeerManagerFindPeersV2()` now mirrors it.
+- **Fixed-peer sync used the same adaptive bloom false-positive rate as normal multi-peer sync**, including the
+  misbehaving-peer sanity check that disconnects a peer whose observed false-positive rate climbs too high.
+  That check assumes peer diversity (drop one, pick another) that fixed-peer mode doesn't have by design — a
+  single pinned peer has no fallback, so the adaptive/disconnect logic is now skipped while a fixed peer is
+  set, and `BLOOM_TRUSTED_FALSEPOSITIVE_RATE` is used as the pinned rate instead. Restarting a sync without a
+  fixed peer still resets to `BLOOM_DEFAULT_FALSEPOSITIVE_RATE` and resumes adaptive behavior as before.
+
+### Tuning
+
+- `BLOOM_TRUSTED_FALSEPOSITIVE_RATE` moved twice this release: `0.1` → `0.0001` → **`0.0005`**. The original
+  `0.1` was chosen so a single trusted node can't distinguish real matches from noise; live device testing
+  (Pixel 4a, fixed-peer sync against a real Litecoin Core node) showed this rate has essentially no bandwidth
+  cost against a *compliant* peer once tightened, since expected false positives per block approach zero well
+  before `0.0001`. Settled on `0.0005` rather than staying at `0.0001` to keep more headroom against
+  `BRBloomFilterNew`'s `BLOOM_MAX_FILTER_LENGTH` clamp for wallets with larger address/UTXO/transaction
+  histories than the one this was tested against — past that clamp, the filter's hash-function count can round
+  down to 0, which makes it match unconditionally (see `BRBloomFilterContainsData()`), the same
+  "relays-everything" symptom this tuning is meant to avoid, just self-inflicted rather than peer-caused.
+- Note for anyone chasing an unexpectedly slow fixed-peer sync: this rate only matters against a peer that
+  actually applies a loaded bloom filter. Testing against a real node also surfaced one that accepted a
+  correctly-sized `filterload` but never used it to restrict `merkleblock`/`tx` relay — every value of this
+  constant is equally ineffective against a peer like that. That's a peer-side limitation outside this
+  library's control, not something this release can fix, but it's why sync speed on a trusted-node connection
+  should be diagnosed against the peer's own behavior (e.g. its `getpeerinfo` message byte counts) before
+  assuming a client-side rate is the bottleneck.
+
+### Performance
+
+- **`TCP_NODELAY` set on peer sockets** (`BRPeer.c`) — the wire protocol is small-message/request-response
+  heavy (version/verack, ping/pong, getheaders/getdata), and Nagle's algorithm plus the remote side's delayed
+  ACKs added latency to every one of those round trips for no bandwidth benefit. Doesn't affect the bulk
+  merkleblock/tx stream, which already sends full-size segments, but benefits fixed-peer sync in particular,
+  which is chatty with small round trips over a single connection. Non-fatal like the neighboring
+  `SO_KEEPALIVE`/`SO_NOSIGPIPE` calls — a platform where `TCP_NODELAY` fails just keeps Nagle's default
+  behavior.
+
 ## v10.4.0
 
 **Branch:** `release/v10.4.0` &middot; **Merged from:** `develop` (PRs [#21](https://github.com/gruntsoftware/core/pull/21)/[#22](https://github.com/gruntsoftware/core/pull/22))

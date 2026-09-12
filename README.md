@@ -94,6 +94,22 @@ For the full, up-to-date changelog see [GitHub Releases](https://github.com/grun
 
 ---
 
+### **v10.4.1**  [PR [#25](https://github.com/gruntsoftware/core/pull/25)]
+---
+#### 🐛 Trusted-Node Sync Fix
+- **Setting a trusted node had no effect** — `_BRPeerManagerFindPeersV2()` never checked for a configured fixed peer, so sync connected to a random mainnet peer regardless. Fixed to mirror the original peer-discovery path's fixed-peer handling.
+- The adaptive bloom false-positive rate (and its misbehaving-peer disconnect check) assumes peer diversity that fixed-peer mode doesn't have; now skipped in favor of a pinned `BLOOM_TRUSTED_FALSEPOSITIVE_RATE` while a fixed peer is set.
+
+#### 🎛️ Tuning
+- `BLOOM_TRUSTED_FALSEPOSITIVE_RATE`: `0.1` → `0.0001` → **`0.0005`**, after live device testing showed diminishing bandwidth returns below `0.0001` for typical wallets, and settled higher to keep headroom against a filter-size clamp that can otherwise degrade large wallets' filters to match-everything.
+
+#### ⚡ Performance
+- `TCP_NODELAY` set on peer sockets — cuts round-trip latency on the protocol's small control messages (version/verack, ping/pong, getheaders/getdata), most noticeable on a single chatty fixed-peer connection.
+
+**Full Changelog**: https://github.com/gruntsoftware/core/compare/v10.4.0...v10.4.1
+
+---
+
 ### **v10.4.0**  [PR [#21](https://github.com/gruntsoftware/core/pull/21)/[#22](https://github.com/gruntsoftware/core/pull/22)]
 ---
 #### 🔧 Build Fix
