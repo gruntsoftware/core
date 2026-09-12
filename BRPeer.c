@@ -40,7 +40,8 @@
 #include <netdb.h>
 #include <sys/socket.h>
 #include <sys/time.h>
-#include <netinet/in.h>	
+#include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <arpa/inet.h>
 
 #define HEADER_LENGTH      24
@@ -862,6 +863,11 @@ static int _BRPeerOpenSocket(BRPeer *peer, int domain, double timeout, int *erro
 #ifdef SO_NOSIGPIPE // BSD based systems have a SO_NOSIGPIPE socket option to supress SIGPIPE signals
         setsockopt(ctx->socket, SOL_SOCKET, SO_NOSIGPIPE, &on, sizeof(on));
 #endif
+        // disable Nagle's algorithm: the wire protocol is small-message/request-response heavy
+        // (version/verack, ping/pong, getheaders/getdata) and batching those with Nagle plus the
+        // peer's delayed ACKs adds latency to every round trip for no bandwidth benefit; doesn't
+        // affect the bulk merkleblock/tx stream, which already sends full-size segments.
+        setsockopt(ctx->socket, IPPROTO_TCP, TCP_NODELAY, &on, sizeof(on));
         arg = fcntl(ctx->socket, F_GETFL, NULL);
         if (arg < 0 || fcntl(ctx->socket, F_SETFL, arg | O_NONBLOCK) < 0) r = 0; // temporarily set socket non-blocking
         if (! r) err = errno;
