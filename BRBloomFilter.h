@@ -36,7 +36,7 @@ extern "C" {
 
 // used when syncing through a single user-selected trusted node (BRPeerManagerSetFixedPeer):
 // a deliberately loose rate so the trusted node can't tell which addresses are actually ours
-#define BLOOM_TRUSTED_FALSEPOSITIVE_RATE 0.0001
+#define BLOOM_TRUSTED_FALSEPOSITIVE_RATE 0.0005
 #define BLOOM_DEFAULT_FALSEPOSITIVE_RATE 0.001 // use 0.00005 for less data, 0.001 for good anonymity
 #define BLOOM_REDUCED_FALSEPOSITIVE_RATE 0.0005
 #define BLOOM_UPDATE_NONE                0
