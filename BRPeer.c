@@ -1149,6 +1149,11 @@ BRPeerStatus BRPeerConnectStatus(BRPeer *peer)
     return ((BRPeerContext *)peer)->status;
 }
 
+int BRPeerIsWaitingForNetwork(BRPeer *peer)
+{
+    return ((BRPeerContext *)peer)->waitingForNetwork;
+}
+
 // open connection to peer and perform handshake
 void BRPeerConnect(BRPeer *peer)
 {
