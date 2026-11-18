@@ -2344,7 +2344,16 @@ void BRPeerManagerDisconnect(BRPeerManager *manager)
         p = manager->connectedPeers[i - 1];
         manager->connectFailureCount = MAX_CONNECT_FAILURES; // prevent futher automatic reconnect attempts
         BRPeerDisconnect(p);
-        if (BRPeerConnectStatus(p) == BRPeerStatusConnecting) manager->peerThreadCount--; // waiting for network
+
+        // Only peers still waiting for network reachability have no thread to run _peerThreadCleanup(), so only
+        // they need their count released here. A peer whose thread is running but hasn't finished the handshake is
+        // also BRPeerStatusConnecting; decrementing for it too double-counts once its thread exits, letting the wait
+        // loop below return while that thread is still live, and BRPeerManagerFree() then frees the manager/peer out
+        // from under it (Crashlytics a82fa4956025d87609f0f8ba2e87a11d: SIGSEGV at 0xfffffffc, i.e. array_count(NULL)
+        // on zeroed, reused memory, from a native peer thread).
+        if (BRPeerConnectStatus(p) == BRPeerStatusConnecting && BRPeerIsWaitingForNetwork(p)) {
+            manager->peerThreadCount--;
+        }
     }
 
     peerThreadCount = manager->peerThreadCount;

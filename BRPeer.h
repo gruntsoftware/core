@@ -145,6 +145,10 @@ void BRPeerSetCurrentBlockHeight(BRPeer *peer, uint32_t currentBlockHeight);
 // current connection status
 BRPeerStatus BRPeerConnectStatus(BRPeer *peer);
 
+// true if BRPeerConnect() deferred connecting until the network is reachable, meaning no peer thread is running yet
+// (BRPeerStatusConnecting alone doesn't distinguish this from a live thread that hasn't finished its handshake)
+int BRPeerIsWaitingForNetwork(BRPeer *peer);
+
 // open connection to peer and perform handshake
 void BRPeerConnect(BRPeer *peer);
 
