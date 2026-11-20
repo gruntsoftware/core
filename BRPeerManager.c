@@ -656,6 +656,24 @@ static void _BRPeerManagerPublishPendingTx(BRPeerManager *manager, BRPeer *peer)
     BRPeerSendInv(peer, manager->publishedTxHashes, array_count(manager->publishedTxHashes));
 }
 
+// Once no publish callbacks are pending, cancels the publish timeout that _BRPeerManagerPublishPendingTx() scheduled
+// on every peer the tx was sent to, not just the peer that relayed it back. Leaves the downloadPeer's sync timeout
+// and the privacy-shield verifyPeer timeout alone.
+static void _BRPeerManagerCancelPublishTimeouts(BRPeerManager *manager)
+{
+    for (size_t i = array_count(manager->publishedTx); i > 0; i--) {
+        if (manager->publishedTx[i - 1].callback != NULL) return; // still waiting on a publish
+    }
+
+    for (size_t i = array_count(manager->connectedPeers); i > 0; i--) {
+        BRPeer *p = manager->connectedPeers[i - 1];
+
+        if (p == manager->verifyPeer) continue;
+        if (manager->syncStartHeight > 0 && p == manager->downloadPeer) continue;
+        BRPeerScheduleDisconnect(p, -1);
+    }
+}
+
 static void _mempoolDone(void *info, int success)
 {
     BRPeer *peer = ((BRPeerCallbackInfo *)info)->peer;
@@ -1378,15 +1396,58 @@ static void _peerDisconnected(void *info, int error)
     else if (manager->connectFailureCount < MAX_CONNECT_FAILURES) willReconnect = 1;
 
     if (txError) {
+        UInt256 unrelayed[array_count(manager->publishedTx) + 1];
+        size_t unrelayedCount = 0;
+
         for (size_t i = array_count(manager->publishedTx); i > 0; i--) {
             if (manager->publishedTx[i - 1].callback == NULL) continue;
+
+            BRTransaction *tx = manager->publishedTx[i - 1].tx;
+            UInt256 txHash = manager->publishedTxHashes[i - 1];
+
             peer_log(peer, "transaction canceled: %s", strerror(txError));
             txInfo[txCount] = manager->publishedTx[i - 1].info;
             txCallback[txCount] = manager->publishedTx[i - 1].callback;
             txCount++;
-            BRTransactionFree(manager->publishedTx[i - 1].tx);
             array_rm(manager->publishedTxHashes, i - 1);
             array_rm(manager->publishedTx, i - 1);
+
+            if (BRWalletTransactionForHash(manager->wallet, txHash) == tx) {
+                // the wallet registered this tx when a peer requested it, so the wallet owns it: don't free it here.
+                // nothing relayed it back, so drop it (below) rather than leave a send the network never accepted
+                // pending in the wallet, where its change output could be spent by the next send
+                if (_BRTxPeerListCount(manager->txRelays, txHash) == 0 && tx->blockHeight == TX_UNCONFIRMED) {
+                    unrelayed[unrelayedCount++] = txHash;
+                }
+            }
+            else BRTransactionFree(tx);
+        }
+
+        if (unrelayedCount > 0) {
+            // BRWalletRemoveTransaction() also frees any tx that spends the removed one, and those can still be in
+            // publishedTx, so note which remaining entries the wallet owns, then drop the ones it freed
+            size_t publishedCount = array_count(manager->publishedTx);
+            int walletOwned[publishedCount + 1];
+
+            for (size_t i = 0; i < publishedCount; i++) {
+                walletOwned[i] = (BRWalletTransactionForHash(manager->wallet, manager->publishedTxHashes[i]) ==
+                                  manager->publishedTx[i].tx);
+            }
+
+            for (size_t i = 0; i < unrelayedCount; i++) {
+                peer_log(peer, "removing unrelayed tx: %s", u256hex(unrelayed[i]));
+                BRWalletRemoveTransaction(manager->wallet, unrelayed[i]);
+            }
+
+            for (size_t i = publishedCount; i > 0; i--) {
+                // entries left here have no callback (all pending ones were collected above), so just drop them
+                if (! walletOwned[i - 1] || BRWalletTransactionForHash(manager->wallet, manager->publishedTxHashes[i - 1])) {
+                    continue;
+                }
+
+                array_rm(manager->publishedTxHashes, i - 1);
+                array_rm(manager->publishedTx, i - 1);
+            }
         }
     }
 
@@ -1517,6 +1578,7 @@ static void _peerRelayedTx(void *info, BRTransaction *tx)
         _BRPeerManagerUpdateTx(manager, &tx->txHash, 1, TX_UNCONFIRMED, (uint32_t)time(NULL));
     }
 
+    if (txCallback) _BRPeerManagerCancelPublishTimeouts(manager);
     pthread_mutex_unlock(&manager->lock);
     if (txCallback) txCallback(txInfo, 0);
 }
@@ -1573,6 +1635,7 @@ static void _peerHasTx(void *info, UInt256 txHash)
         _BRTxPeerListRemovePeer(manager->txRequests, txHash, peer);
     }
 
+    if (txCallback) _BRPeerManagerCancelPublishTimeouts(manager);
     pthread_mutex_unlock(&manager->lock);
     if (txCallback) txCallback(txInfo, 0);
 }
@@ -2005,20 +2068,30 @@ static BRTransaction *_peerRequestedTx(void *info, UInt256 txHash)
     BRTransaction *tx = NULL;
     void *txInfo = NULL;
     void (*txCallback)(void *, int) = NULL;
-    int hasPendingCallbacks = 0, error = 0;
+    int hasPendingCallbacks = 0, error = 0, canBeRelayedBack = 0;
+    size_t connectedCount = 0;
 
     pthread_mutex_lock(&manager->lock);
+
+    for (size_t i = array_count(manager->connectedPeers); i > 0; i--) {
+        if (BRPeerConnectStatus(manager->connectedPeers[i - 1]) == BRPeerStatusConnected) connectedCount++;
+    }
+
+    // A peer asking for the tx (getdata) hasn't validated it yet. With 2+ connected peers, BRPeerManagerPublishTx()
+    // holds the downloadPeer back, so a valid tx is relayed back by the network (_peerHasTx/_peerRelayedTx), and only
+    // then is the publish callback told it succeeded. A tx the network rejects (e.g. missing-inputs) is never relayed
+    // back, so the publish times out (ETIMEDOUT in _peerDisconnected) instead of reporting a false success. With a
+    // single peer (e.g. a trusted node) nothing can relay it back, so the getdata is still taken as success.
+    canBeRelayedBack = (connectedCount > 1);
 
     for (size_t i = array_count(manager->publishedTx); i > 0; i--) {
         if (UInt256Eq(manager->publishedTxHashes[i - 1], txHash)) {
             tx = manager->publishedTx[i - 1].tx;
-            txInfo = manager->publishedTx[i - 1].info;
-            txCallback = manager->publishedTx[i - 1].callback;
-            manager->publishedTx[i - 1].info = NULL;
-            manager->publishedTx[i - 1].callback = NULL;
 
             if (tx && ! BRWalletTransactionIsValid(manager->wallet, tx)) {
                 error = EINVAL;
+                txInfo = manager->publishedTx[i - 1].info;
+                txCallback = manager->publishedTx[i - 1].callback;
                 array_rm(manager->publishedTx, i - 1);
                 array_rm(manager->publishedTxHashes, i - 1);
 
@@ -2027,6 +2100,13 @@ static BRTransaction *_peerRequestedTx(void *info, UInt256 txHash)
                     tx = NULL;
                 }
             }
+            else if (! canBeRelayedBack) {
+                txInfo = manager->publishedTx[i - 1].info;
+                txCallback = manager->publishedTx[i - 1].callback;
+                manager->publishedTx[i - 1].info = NULL;
+                manager->publishedTx[i - 1].callback = NULL;
+            }
+            else if (manager->publishedTx[i - 1].callback != NULL) hasPendingCallbacks = 1; // wait for relay back
         }
         else if (manager->publishedTx[i - 1].callback != NULL) hasPendingCallbacks = 1;
     }
@@ -2037,7 +2117,9 @@ static BRTransaction *_peerRequestedTx(void *info, UInt256 txHash)
     }
 
     if (tx && ! error) {
-        _BRTxPeerListAddPeer(&manager->txRelays, txHash, peer);
+        // only count the requesting peer as a relay when nothing else can confirm the tx; otherwise a getdata would
+        // keep a rejected tx looking relayed, and _requestUnrelayedTxGetdataDone() would never remove it
+        if (! canBeRelayedBack) _BRTxPeerListAddPeer(&manager->txRelays, txHash, peer);
         BRWalletRegisterTransaction(manager->wallet, tx);
     }
 
