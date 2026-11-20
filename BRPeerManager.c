@@ -1358,10 +1358,13 @@ static void _peerDisconnected(void *info, int error)
 
         manager->connectFailureCount++;
 
-        // if it's a timeout and there's pending tx publish callbacks, the tx publish timed out
-        // BUG: XXX what if it's a connect timeout and not a publish timeout?
-        if (error == ETIMEDOUT && (peer != manager->downloadPeer || manager->syncStartHeight == 0 ||
-                                   array_count(manager->connectedPeers) == 1)) txError = ETIMEDOUT;
+        // publish timeouts are only scheduled on peers that finished the handshake, so a peer that timed out while
+        // still connecting (it never sent its version) says nothing about a pending publish and must not cancel it
+        int completedHandshake = (BRPeerVersion(peer) != 0);
+
+        // if a connected peer timed out and there's pending tx publish callbacks, the tx publish timed out
+        if (error == ETIMEDOUT && completedHandshake && (peer != manager->downloadPeer || manager->syncStartHeight == 0 ||
+                                                         array_count(manager->connectedPeers) == 1)) txError = ETIMEDOUT;
     }
 
     for (size_t i = array_count(manager->txRelays); i > 0; i--) {
