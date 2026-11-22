@@ -20,10 +20,17 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
+// log without a peer, peer_log() needs a peer from BRPeerNew() and reads out of bounds if given BR_PEER_NONE
+#define manager_log(...) _peer_log("peer manager: " _va_first(__VA_ARGS__, NULL) "\n", _va_rest(__VA_ARGS__, NULL))
+
 #define PROTOCOL_TIMEOUT      20.0
+#define API_PEERS_MAX         175 // ignore any api peers past this many
+#define API_PEERS_RESERVED    2 // connections kept for non-api peers, so the api never picks every peer
+#define API_PEERS_FAILURES    PEER_MAX_CONNECTIONS // give up on api peers after this many connect failures in a row
 #define MAX_CONNECT_FAILURES  20 // notify user of network problems after this many connect failures in a row
 #define PEER_FLAG_SYNCED      0x01
 #define PEER_FLAG_NEEDSUPDATE 0x02
+#define PEER_FLAG_API         0x04 // connection was picked from the api peers
 
 // Privacy shield: max blocks buffered from the verification peer awaiting cross-comparison
 #define PRIVACY_BLOCK_BUFFER_CAP 64
@@ -167,6 +174,8 @@ struct BRPeerManagerStruct {
     BRWallet *wallet;
     int isConnected, connectFailureCount, misbehavinCount, dnsThreadCount, maxConnectCount, peerThreadCount;
     BRPeer *peers, *downloadPeer, fixedPeer, **connectedPeers;
+    BRPeer *apiPeers; // preferred peers, see BRPeerManagerSetApiPeers(), flags is non-zero once a peer has failed
+    int backupPeersAdded; // true if hardcoded backup peers were added to peers since it was last cleared
     char downloadPeerName[INET6_ADDRSTRLEN + 6];
     uint32_t earliestKeyTime, syncStartHeight, filterUpdateHeight, estimatedHeight;
     BRBloomFilter *bloomFilter;
@@ -199,8 +208,51 @@ struct BRPeerManagerStruct {
     pthread_mutex_t privacyLock;                   // protects privacyBlockBuffer
 };
 
+// number of current connections that were picked from the api peers
+static size_t _BRPeerManagerApiConnections(BRPeerManager *manager)
+{
+    size_t count = 0;
+
+    for (size_t i = array_count(manager->connectedPeers); i > 0; i--) {
+        if ((manager->connectedPeers[i - 1]->flags & PEER_FLAG_API) != 0) count++;
+    }
+
+    return count;
+}
+
+// if peer came from the api, don't pick it again until the api peers are reset
+static void _BRPeerManagerApiPeerFailed(BRPeerManager *manager, const BRPeer *peer)
+{
+    for (size_t i = array_count(manager->apiPeers); i > 0; i--) {
+        if (! BRPeerEq(&manager->apiPeers[i - 1], peer)) continue;
+        manager->apiPeers[i - 1].flags = 1;
+        break;
+    }
+}
+
+// makes all api peers eligible again, called when starting over with an empty peer list
+static void _BRPeerManagerApiPeersReset(BRPeerManager *manager)
+{
+    for (size_t i = array_count(manager->apiPeers); i > 0; i--) manager->apiPeers[i - 1].flags = 0;
+    manager->backupPeersAdded = 0;
+}
+
+// peer connected but can't be used, don't pick it again until the peer list is replenished
+static void _BRPeerManagerPeerRejected(BRPeerManager *manager, BRPeer *peer)
+{
+    _BRPeerManagerApiPeerFailed(manager, peer);
+
+    for (size_t i = array_count(manager->peers); i > 0; i--) {
+        if (BRPeerEq(&manager->peers[i - 1], peer)) array_rm(manager->peers, i - 1);
+    }
+
+    BRPeerDisconnect(peer);
+}
+
 static void _BRPeerManagerPeerMisbehavin(BRPeerManager *manager, BRPeer *peer)
 {
+    _BRPeerManagerApiPeerFailed(manager, peer);
+
     for (size_t i = array_count(manager->peers); i > 0; i--) {
         if (BRPeerEq(&manager->peers[i - 1], peer)) array_rm(manager->peers, i - 1);
     }
@@ -208,6 +260,7 @@ static void _BRPeerManagerPeerMisbehavin(BRPeerManager *manager, BRPeer *peer)
     if (++manager->misbehavinCount >= 10) { // clear out stored peers so we get a fresh list from DNS for next connect
         manager->misbehavinCount = 0;
         array_clear(manager->peers);
+        manager->backupPeersAdded = 0;
     }
 
     BRPeerDisconnect(peer);
@@ -847,7 +900,81 @@ static void _BRPeerManagerFindPeers(BRPeerManager *manager)
     }
 }
 
-// DNS peer discovery V2 (New)
+// Puts the hardcoded peers at the front of the peer list. They're the backup for when the api (BRPeerManagerSetApiPeers)
+// is unavailable or its peers don't work, and normally fill the connections reserved for non-api peers.
+static void _BRPeerManagerAddBackupPeers(BRPeerManager *manager)
+{
+    uint64_t services = SERVICES_NODE_NETWORK | SERVICES_NODE_BLOOM | manager->params->services;
+    time_t now = time(NULL);
+    size_t added = 0;
+
+    // Mainnet crawl, 2026-11-22: 381 reachable IPv4 nodes on the standard port, 29 advertising NODE_NETWORK|NODE_BLOOM.
+    // These are the ones that also returned a merkleblock for a loaded bloom filter in most of the repeat runs, except
+    // 24.99.84.12, which passed but identifies itself as /Satoshi:0.13.2/.
+    // Newer software first, since all get the same timestamp and peer selection favors the front of the list.
+    const char *hardcodedIPs[] = {
+            "86.107.187.54",
+            "31.7.59.196",
+            "70.63.170.86",
+            "193.164.140.87",
+            "31.172.68.217",
+            "213.141.198.207",
+            "37.187.135.199",
+            "77.247.178.158",
+            "51.75.147.82",
+            "147.182.167.48",
+            "152.42.139.133",
+            "162.19.204.41",
+            "91.121.62.2",
+            "193.198.34.24",
+            "77.42.113.13",
+            "81.78.153.250",
+            "46.4.105.19",
+            "78.46.46.22",
+            "95.216.118.33",
+            "212.92.101.189",
+            "5.189.187.89",
+            "95.216.21.47",
+            "97.181.180.4",
+            "54.38.92.54",
+            "54.38.222.61",
+            "92.75.134.75",
+            NULL // Terminator
+    };
+
+    for (int i = 0; hardcodedIPs[i] != NULL; i++) {
+        UInt128 peerAddr = UINT128_ZERO;
+        struct in6_addr v6addr;
+        struct in_addr v4addr;
+
+        if (inet_pton(AF_INET6, hardcodedIPs[i], &v6addr) == 1) {
+            memcpy(&peerAddr.u8[0], &v6addr.s6_addr[0], 16);
+        }
+        else if (inet_pton(AF_INET, hardcodedIPs[i], &v4addr) == 1) { // map IPv4 to IPv6 format ::ffff:ipv4
+            peerAddr.u16[5] = 0xffff;
+            peerAddr.u32[3] = v4addr.s_addr;
+        }
+        else {
+            manager_log("Invalid hardcoded IP address format: %s", hardcodedIPs[i]);
+            continue; // Skip this entry
+        }
+
+        BRPeer peer = { peerAddr, manager->params->standardPort, services, now, 0 };
+
+        for (size_t j = array_count(manager->peers); j > 0; j--) { // replace any saved or gossiped entry
+            if (BRPeerEq(&manager->peers[j - 1], &peer)) array_rm(manager->peers, j - 1);
+        }
+
+        // BRPeerManagerConnect() only considers the first peers in the list, so don't add these behind older ones
+        array_insert(manager->peers, added, peer);
+        added++;
+    }
+
+    manager->backupPeersAdded = 1;
+    manager_log("added %zu hardcoded peer(s)", added);
+}
+
+// peer discovery V2, api peers aren't part of the peer list, see BRPeerManagerConnect()
 static void _BRPeerManagerFindPeersV2(BRPeerManager *manager)
 {
     uint64_t services = SERVICES_NODE_NETWORK | SERVICES_NODE_BLOOM | manager->params->services;
@@ -867,7 +994,7 @@ static void _BRPeerManagerFindPeersV2(BRPeerManager *manager)
         // The adaptive fpRate tightening in _peerRelayedBlock() is skipped while a fixed
         // peer is set, so this rate holds for the whole fixed-peer sync.
         manager->fpRate = BLOOM_TRUSTED_FALSEPOSITIVE_RATE;
-        peer_log(&BR_PEER_NONE, "using fixed peer, skipping peer discovery (fpRate %f)", manager->fpRate);
+        manager_log("using fixed peer, skipping peer discovery (fpRate %f)", manager->fpRate);
         return;
     }
 
@@ -876,157 +1003,7 @@ static void _BRPeerManagerFindPeersV2(BRPeerManager *manager)
     // adapts it downward as blocks arrive, as before.
     manager->fpRate = BLOOM_DEFAULT_FALSEPOSITIVE_RATE;
 
-    //TODO: WIP HERE, get from shared prefs
-    // List of hardcoded IP addresses (replace with actual IPs for your network)
-    // Ensure these peers are reliable and support SPV mode.
-    //source: csv file, https://github.com/gruntsoftware/internal/issues/122
-    const char *hardcodedIPs[] = {
-            "5.75.210.121",
-            "5.9.28.184",
-            "185.141.63.12",
-            "65.108.238.59",
-            "51.89.218.11",
-            "95.165.139.210",
-            "34.50.78.113",
-            "95.217.104.124",
-            "88.99.149.100",
-            "44.240.86.167",
-            "81.78.175.48",
-            "58.229.208.217",
-            "148.113.1.52",
-            "34.102.113.172",
-            "134.195.198.75",
-            "3.68.34.196",
-            "116.203.4.236",
-            "89.116.28.74",
-            "84.32.248.182",
-            "199.45.199.232",
-            "5.223.17.75",
-            "77.247.178.158",
-            "78.46.78.206",
-            "121.134.197.201",
-            "159.69.65.217",
-            "95.217.44.33",
-            "185.123.100.68",
-            "65.109.123.164",
-            "141.95.124.212",
-            "2.207.17.144",
-            "185.69.167.211",
-            "85.214.61.209",
-            "37.15.60.69",
-            "46.4.105.19",
-            "51.38.41.205",
-            "95.216.39.190",
-            "51.75.147.82",
-            "66.29.129.218",
-            "173.249.42.182",
-            "134.119.221.106",
-            "34.105.208.154",
-            "5.161.21.203",
-            "167.114.101.87",
-            "18.193.218.8",
-            "108.94.105.78",
-            "51.161.172.84",
-            "94.23.248.168",
-            "147.182.167.48",
-            "65.109.242.120",
-            "185.117.90.208",
-            "103.75.119.14",
-            "95.216.21.47",
-            "54.38.92.54",
-            "152.42.139.133",
-            "162.19.204.41",
-            "70.63.170.86",
-            "185.197.160.61",
-            "192.99.150.26",
-            "104.248.144.99",
-            "73.137.217.231",
-            "136.179.8.70",
-            "65.109.76.212",
-            "51.161.172.142",
-            "165.227.84.200",
-            "91.121.62.2",
-            "95.216.159.206",
-            "94.23.220.121",
-            "51.161.209.147",
-            "185.25.120.91",
-            "54.38.222.61",
-            "193.164.140.87",
-            "185.175.46.101",
-            "51.79.82.75",
-            "14.203.57.50",
-            "5.199.168.101",
-            "192.99.37.171",
-            "51.89.194.158",
-            "111.108.29.123",
-            "95.217.139.56",
-            "85.15.179.171",
-            "142.44.138.17",
-            "5.189.187.89",
-            "190.2.130.27",
-            "95.211.193.101",
-            "75.223.33.152",
-            "46.101.3.154",
-            "109.199.121.131",
-            "80.111.142.213",
-            "173.212.217.55",
-            "51.161.209.100",
-            "78.46.46.22",
-            "88.99.250.169",
-            "135.181.164.52",
-            "95.217.78.81",
-            "95.216.118.33",
-            "95.216.64.219",
-            "103.106.231.72",
-            "34.48.168.22",
-            "67.21.93.74",
-            "34.47.71.1",
-            "34.38.106.149",
-            "5.78.28.164",
-            "159.118.235.179",
-            "195.154.187.6",
-            "212.92.101.189",
-            "91.232.105.180",
-            "91.206.16.214",
-            "35.199.99.247",
-            NULL // Terminator
-    };
-
-    for (int i = 0; hardcodedIPs[i] != NULL; i++) {
-        UInt128 peerAddr = UINT128_ZERO;
-        struct in6_addr v6addr;
-        struct in_addr v4addr;
-
-        // Try parsing as IPv6 first
-        if (inet_pton(AF_INET6, hardcodedIPs[i], &v6addr) == 1) {
-            // Successfully parsed as IPv6
-            memcpy(&peerAddr.u8[0], &v6addr.s6_addr[0], 16);
-        }
-            // Try parsing as IPv4
-        else if (inet_pton(AF_INET, hardcodedIPs[i], &v4addr) == 1) {
-            // Successfully parsed as IPv4 - map to IPv6 format ::ffff:ipv4
-            peerAddr.u16[5] = 0xffff;
-            peerAddr.u32[3] = v4addr.s_addr;
-        } else {
-            // Invalid IP address string format
-            peer_log(&BR_PEER_NONE, "Invalid hardcoded IP address format: %s", hardcodedIPs[i]);
-            continue; // Skip this entry
-        }
-
-        // Check if peer already exists (optional, prevents duplicates if also found via DNS)
-        int exists = 0;
-        for(size_t j=0; j < array_count(manager->peers); j++) {
-            if (UInt128Eq(manager->peers[j].address, peerAddr) && manager->peers[j].port == manager->params->standardPort) {
-                exists = 1;
-                break;
-            }
-        }
-
-        if (!exists && !UInt128IsZero(peerAddr)) {
-            array_add(manager->peers, ((BRPeer) { peerAddr, manager->params->standardPort, services, now, 0 }));
-            peer_log(&BR_PEER_NONE, "Added hardcoded peer: %s", hardcodedIPs[i]);
-        }
-    }
+    _BRPeerManagerAddBackupPeers(manager);
 }
 
 // Free a privacy block record's internal storage
@@ -1228,7 +1205,7 @@ static void _BRPeerManagerStopPrivacyShield(BRPeerManager *manager)
 {
     if (!manager->privacyShieldRunning) return;
 
-    peer_log(&BR_PEER_NONE, "PRIVACY: stopping privacy shield");
+    manager_log("PRIVACY: stopping privacy shield");
     manager->privacyShieldRunning = 0;
     manager->verifyPeer = NULL;
 
@@ -1255,19 +1232,19 @@ static void _peerConnected(void *info)
     // TODO: XXX does this work with 0.11 pruned nodes?
     if ((peer->services & manager->params->services) != manager->params->services) {
         peer_log(peer, "unsupported node type");
-        BRPeerDisconnect(peer);
+        _BRPeerManagerPeerRejected(manager, peer);
     }
     else if ((peer->services & SERVICES_NODE_NETWORK) != SERVICES_NODE_NETWORK) {
         peer_log(peer, "node doesn't carry full blocks");
-        BRPeerDisconnect(peer);
+        _BRPeerManagerPeerRejected(manager, peer);
     }
     else if (BRPeerLastBlock(peer) + 10 < manager->lastBlock->height) {
         peer_log(peer, "node isn't synced");
-        BRPeerDisconnect(peer);
+        _BRPeerManagerPeerRejected(manager, peer);
     }
     else if (BRPeerVersion(peer) >= 70011 && (peer->services & SERVICES_NODE_BLOOM) != SERVICES_NODE_BLOOM) {
         peer_log(peer, "node doesn't support SPV mode");
-        BRPeerDisconnect(peer);
+        _BRPeerManagerPeerRejected(manager, peer);
     }
     else if (manager->downloadPeer && // check if we should stick with the existing download peer
              (BRPeerLastBlock(manager->downloadPeer) >= BRPeerLastBlock(peer) ||
@@ -1352,6 +1329,8 @@ static void _peerDisconnected(void *info, int error)
         _BRPeerManagerPeerMisbehavin(manager, peer);
     }
     else if (error) { // timeout or some non-protocol related network error
+        _BRPeerManagerApiPeerFailed(manager, peer);
+
         for (size_t i = array_count(manager->peers); i > 0; i--) {
             if (BRPeerEq(&manager->peers[i - 1], peer)) array_rm(manager->peers, i - 1);
         }
@@ -1392,6 +1371,7 @@ static void _peerDisconnected(void *info, int error)
 
         // clear out stored peers so we get a fresh list from DNS on next connect attempt
         array_clear(manager->peers);
+        _BRPeerManagerApiPeersReset(manager);
         txError = ENOTCONN; // trigger any pending tx publish callbacks
         willSave = 1;
         peer_log(peer, "sync failed");
@@ -1891,7 +1871,7 @@ static void _peerRelayedBlock(void *info, BRMerkleBlock *block)
 
             // Privacy shield work is done once sync completes — verify peer becomes a regular peer
             if (manager->privacyShieldRunning) {
-                peer_log(&BR_PEER_NONE, "PRIVACY: sync complete, disabling privacy shield");
+                manager_log("PRIVACY: sync complete, disabling privacy shield");
                 _BRPeerManagerStopPrivacyShield(manager);
             }
         }
@@ -2182,6 +2162,7 @@ BRPeerManager *BRPeerManagerNew(const BRChainParams *params, BRWallet *wallet, u
     array_new(manager->peers, peersCount);
     if (peers) array_add_array(manager->peers, peers, peersCount);
     qsort(manager->peers, array_count(manager->peers), sizeof(*manager->peers), _peerTimestampCompare);
+    array_new(manager->apiPeers, 0);
     array_new(manager->connectedPeers, PEER_MAX_CONNECTIONS);
     manager->blocks = BRSetNew(BRMerkleBlockHash, BRMerkleBlockEq, blocksCount);
     manager->orphans = BRSetNew(_BRPrevBlockHash, _BRPrevBlockEq, blocksCount); // orphans are indexed by prevBlock
@@ -2295,7 +2276,42 @@ void BRPeerManagerSetFixedPeer(BRPeerManager *manager, UInt128 address, uint16_t
     manager->maxConnectCount = UInt128IsZero(address) ? PEER_MAX_CONNECTIONS : 1;
     manager->fixedPeer = ((BRPeer) { address, port, 0, 0, 0 });
     array_clear(manager->peers);
+    _BRPeerManagerApiPeersReset(manager);
     pthread_mutex_unlock(&manager->lock);
+}
+
+// see declaration in BRPeerManager.h
+size_t BRPeerManagerSetApiPeers(BRPeerManager *manager, const BRPeer peers[], size_t peersCount)
+{
+    size_t count;
+
+    assert(manager != NULL);
+    assert(peers != NULL || peersCount == 0);
+    pthread_mutex_lock(&manager->lock);
+
+    uint64_t services = SERVICES_NODE_NETWORK | SERVICES_NODE_BLOOM | manager->params->services;
+
+    array_clear(manager->apiPeers);
+
+    for (size_t i = 0; i < peersCount && array_count(manager->apiPeers) < API_PEERS_MAX; i++) {
+        BRPeer peer = peers[i];
+        int exists = 0;
+
+        if (UInt128IsZero(peer.address) || (peer.services & services) != services) continue;
+        if (peer.port == 0) peer.port = manager->params->standardPort;
+        peer.flags = 0;
+
+        for (size_t j = array_count(manager->apiPeers); j > 0 && ! exists; j--) {
+            exists = BRPeerEq(&manager->apiPeers[j - 1], &peer);
+        }
+
+        if (! exists) array_add(manager->apiPeers, peer);
+    }
+
+    count = array_count(manager->apiPeers);
+    pthread_mutex_unlock(&manager->lock);
+    manager_log("using %zu of %zu api peer(s)", count, peersCount);
+    return count;
 }
 
 uint16_t BRPeerManagerStandardPort(BRPeerManager *manager)
@@ -2348,7 +2364,15 @@ void BRPeerManagerConnect(BRPeerManager *manager)
 
     if (array_count(manager->connectedPeers) < manager->maxConnectCount) {
         time_t now = time(NULL);
-        BRPeer *peers;
+        BRPeer *peers, *apiPeers, *pool;
+
+        // if nothing from the api is connecting, drop it for this attempt so the hardcoded peers get a turn before
+        // MAX_CONNECT_FAILURES is reached
+        if (! manager->isConnected && manager->connectFailureCount >= API_PEERS_FAILURES) {
+            for (size_t i = array_count(manager->apiPeers); i > 0; i--) {
+                _BRPeerManagerApiPeerFailed(manager, &manager->apiPeers[i - 1]);
+            }
+        }
 
         if (array_count(manager->peers) < manager->maxConnectCount ||
             manager->peers[manager->maxConnectCount - 1].timestamp + 3*24*60*60 < now) {
@@ -2356,20 +2380,36 @@ void BRPeerManagerConnect(BRPeerManager *manager)
 //            _BRPeerManagerFindPeers(manager);
             _BRPeerManagerFindPeersV2(manager);
         }
+        else if (UInt128IsZero(manager->fixedPeer.address) && ! manager->backupPeersAdded) {
+            _BRPeerManagerAddBackupPeers(manager); // not FindPeersV2, it would reset fpRate mid-sync
+        }
 
         array_new(peers, 175);
         array_add_array(peers, manager->peers,
                         (array_count(manager->peers) < 175) ? array_count(manager->peers) : 175);
+        array_new(apiPeers, array_count(manager->apiPeers));
 
-        while (array_count(peers) > 0 && array_count(manager->connectedPeers) < manager->maxConnectCount) {
-            size_t i = BRRand((uint32_t)array_count(peers)); // index of random peer
+        for (size_t i = 0; UInt128IsZero(manager->fixedPeer.address) && i < array_count(manager->apiPeers); i++) {
+            if (manager->apiPeers[i].flags == 0) array_add(apiPeers, manager->apiPeers[i]);
+        }
+
+        while (array_count(apiPeers) + array_count(peers) > 0 &&
+               array_count(manager->connectedPeers) < manager->maxConnectCount) {
+            // api peers first, up to the reserved connections, unless there's nothing else left to fill those with
+            pool = (array_count(apiPeers) > 0 &&
+                    (array_count(peers) == 0 ||
+                     _BRPeerManagerApiConnections(manager) + API_PEERS_RESERVED < manager->maxConnectCount)) ?
+                   apiPeers : peers;
+
+            size_t i = BRRand((uint32_t)array_count(pool)); // index of random peer
             BRPeerCallbackInfo *info;
 
-            i = i*i/array_count(peers); // bias random peer selection toward peers with more recent timestamp
+            // bias random peer selection toward peers with more recent timestamp, api peers have no order
+            if (pool == peers) i = i*i/array_count(pool);
 
             for (size_t j = array_count(manager->connectedPeers); i != SIZE_MAX && j > 0; j--) {
-                if (! BRPeerEq(&peers[i], manager->connectedPeers[j - 1])) continue;
-                array_rm(peers, i); // already in connectedPeers
+                if (! BRPeerEq(&pool[i], manager->connectedPeers[j - 1])) continue;
+                array_rm(pool, i); // already in connectedPeers
                 i = SIZE_MAX;
             }
 
@@ -2378,8 +2418,9 @@ void BRPeerManagerConnect(BRPeerManager *manager)
                 assert(info != NULL);
                 info->manager = manager;
                 info->peer = BRPeerNew(manager->params->magicNumber);
-                *info->peer = peers[i];
-                array_rm(peers, i);
+                *info->peer = pool[i];
+                info->peer->flags = (pool == apiPeers) ? PEER_FLAG_API : 0;
+                array_rm(pool, i);
                 array_add(manager->connectedPeers, info->peer);
                 manager->peerThreadCount++;
                 BRPeerSetCallbacks(info->peer, info, _peerConnected, _peerDisconnected, _peerRelayedPeers,
@@ -2397,11 +2438,12 @@ void BRPeerManagerConnect(BRPeerManager *manager)
             }
         }
 
+        array_free(apiPeers);
         array_free(peers);
     }
 
     if (array_count(manager->connectedPeers) == 0) {
-        peer_log(&BR_PEER_NONE, "sync failed");
+        manager_log("sync failed");
         _BRPeerManagerSyncStopped(manager);
         pthread_mutex_unlock(&manager->lock);
         if (manager->syncStopped) manager->syncStopped(manager->info, ENETUNREACH);
@@ -2726,6 +2768,7 @@ void BRPeerManagerFree(BRPeerManager *manager)
     pthread_mutex_lock(&manager->lock);
     _BRPeerManagerStopPrivacyShield(manager);
     array_free(manager->peers);
+    array_free(manager->apiPeers);
     for (size_t i = array_count(manager->connectedPeers); i > 0; i--) BRPeerFree(manager->connectedPeers[i - 1]);
     array_free(manager->connectedPeers);
     BRSetApply(manager->blocks, NULL, _setApplyFreeBlock);
