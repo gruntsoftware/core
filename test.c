@@ -2318,6 +2318,52 @@ int BRMerkleBlockTests()
     return r;
 }
 
+int BRPeerManagerTests()
+{
+    int r = 1;
+    UInt512 seed = UINT512_ZERO;
+    BRMasterPubKey mpk = BRBIP32MasterPubKey(&seed, sizeof(seed));
+    BRWallet *wallet = BRWalletNew(NULL, 0, mpk);
+    BRPeerManager *manager = BRPeerManagerNew(&BRMainNetParams, wallet, BIP39_CREATION_TIME, NULL, 0, NULL, 0,
+                                              BLOOM_DEFAULT_FALSEPOSITIVE_RATE);
+    uint64_t spv = SERVICES_NODE_NETWORK | SERVICES_NODE_BLOOM;
+    UInt128 a = UINT128_ZERO, b = UINT128_ZERO;
+    BRPeer many[300];
+
+    a.u16[5] = b.u16[5] = 0xffff;
+    a.u8[12] = b.u8[12] = 192, a.u8[14] = b.u8[14] = 2; // 192.0.2.0/24, reserved for documentation
+    a.u8[15] = 1, b.u8[15] = 2;
+
+    BRPeer peers[] = {
+        { a, 9333, 1037, 0, 0 },                  // 0x40d, NETWORK|BLOOM
+        { b, 0, spv, 0, 0 },                      // default port
+        { b, 9333, spv, 0, 0 },                   // duplicate of the above
+        { a, 9334, spv, 0, 1 },                   // same address, different port
+        { b, 9334, 0x1800449, 0, 0 },             // NETWORK, no BLOOM
+        { b, 9335, SERVICES_NODE_BLOOM, 0, 0 },   // BLOOM, no NETWORK
+        { UINT128_ZERO, 9333, spv, 0, 0 }         // no address
+    };
+
+    if (BRPeerManagerSetApiPeers(manager, peers, sizeof(peers)/sizeof(*peers)) != 3)
+        r = 0, fprintf(stderr, "***FAILED*** %s: BRPeerManagerSetApiPeers() test 1\n", __func__);
+
+    if (BRPeerManagerSetApiPeers(manager, &peers[4], 1) != 0) // replaces, doesn't append
+        r = 0, fprintf(stderr, "***FAILED*** %s: BRPeerManagerSetApiPeers() test 2\n", __func__);
+
+    if (BRPeerManagerSetApiPeers(manager, NULL, 0) != 0)
+        r = 0, fprintf(stderr, "***FAILED*** %s: BRPeerManagerSetApiPeers() test 3\n", __func__);
+
+    for (size_t i = 0; i < 300; i++) many[i] = ((BRPeer) { a, (uint16_t)(1000 + i), spv, 0, 0 });
+
+    if (BRPeerManagerSetApiPeers(manager, many, 300) != 175) // capped
+        r = 0, fprintf(stderr, "***FAILED*** %s: BRPeerManagerSetApiPeers() test 4\n", __func__);
+
+    BRPeerManagerFree(manager);
+    BRWalletFree(wallet);
+    if (! r) fprintf(stderr, "\n                                    ");
+    return r;
+}
+
 int BRPaymentProtocolTests()
 {
     int r = 1;
@@ -2743,6 +2789,8 @@ int BRRunTests()
     printf("BRMerkleBlockTests...               ");
     printf("%s\n", (BRMerkleBlockTests()) ? "success" : (fail++, "***FAIL***"));
     // informational only: BIP70 payment protocol isn't used by this wallet, so a failure here doesn't fail the suite
+    printf("BRPeerManagerTests...               ");
+    printf("%s\n", (BRPeerManagerTests()) ? "success" : (fail++, "***FAIL***"));
     printf("BRPaymentProtocolTests...           ");
     printf("%s\n", (BRPaymentProtocolTests()) ? "success" : "***FAIL*** (informational, not used)");
     printf("\n");
