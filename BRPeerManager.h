@@ -47,7 +47,8 @@ void BRPeerManagerSetFixedPeer(BRPeerManager *manager, UInt128 address, uint16_t
 // https://api.grunt.ltd/v1/litecoin/nodes and passes them in, with each node's "flags" value as BRPeer.services
 // - peers that don't advertise SERVICES_NODE_NETWORK and SERVICES_NODE_BLOOM are ignored
 // - a port of 0 means the standard port, timestamp and flags are ignored
-// - they're tried before any other peer, with the hardcoded peers as backup if there are too few or they don't work
+// - they're tried before any other peer, except that 2 connections are reserved for non-api peers
+// - other peers, including the hardcoded backup peers, take over if there are too few api peers or they don't work
 // - ignored while a fixed peer is set (see BRPeerManagerSetFixedPeer)
 // thread-safe, call before BRPeerManagerConnect(), or while connected to apply to the next connection made
 // returns the number of peers accepted
